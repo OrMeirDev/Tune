@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   SlidersHorizontal, RefreshCw, Cpu, Sparkles, Trash2, Rocket, Thermometer, Settings2, History, Settings, Home,
   ChevronLeft, ChevronRight, Download, Monitor, Wifi, Bluetooth, Network, Volume2, HardDrive, Usb, Camera, AlertTriangle, Check,
-  Loader2, ShieldCheck, ExternalLink, Search, Undo2, RotateCcw, FolderOpen, FileSpreadsheet, FileText, Droplets,
+  Loader2, ShieldCheck, ExternalLink, Search, Undo2, RotateCcw, FolderOpen, FileSpreadsheet, FileText,
   CircuitBoard, ScanSearch, Info, X, Globe,
 } from 'lucide-react';
 import { LangContext, makeT, useT } from './i18n.js';
@@ -347,14 +347,26 @@ function HardwarePage({ hw, onExport }) {
 
 // Recommendations arrive as data; their wording lives in the dictionary.
 const recTitle = (r, t) => t(`rec.${r.key}.title`);
+const planName = (r, t) => (['balanced', 'high', 'ultimate', 'saver'].includes(r.plan) ? t(`plan.${r.plan}`) : r.value);
 const recValue = (r, t) => ({
-  power: r.value,
+  // Off the recommended plan, say which one is recommended right next to the current one.
+  power: planName(r, t) + (r.ok === false ? ` · ${t('rec.power.recommended', { plan: t('plan.balanced') })}` : ''),
   gamemode: t(r.on ? 'on' : 'off'),
   hags: t(r.on ? 'on' : 'off'),
   disk: t('rec.disk.value', { free: r.freeGB, size: r.sizeGB }),
   bios: `${r.version} (${r.date})`,
 }[r.key] ?? '');
-const recNote = (r, t) => (r.key === 'bios' ? t(r.intel1314 ? 'rec.bios.note1314' : 'rec.bios.note') : t(`rec.${r.key}.note`));
+// A short "why" for every recommendation...
+const recNote = (r, t) => (r.key === 'bios' ? t(r.intel1314 ? 'rec.bios.note1314' : 'rec.bios.note')
+  : r.key === 'power' ? t(`rec.power.why.${r.cpuKind || 'other'}`) : t(`rec.${r.key}.note`));
+// ...and, when it isn't met, what happens if it stays that way.
+function recIf(r, t) {
+  if (r.key === 'bios') return t(r.intel1314 ? 'rec.bios.if1314' : 'rec.bios.if');
+  if (r.key !== 'power') return t(`rec.${r.key}.if`);
+  if (r.plan === 'saver') return t('rec.power.if.saver');
+  if (r.plan === 'custom') return t('rec.power.if.custom');
+  return t('rec.power.if.fast') + (r.cpuKind === 'intelHybrid' ? t('rec.power.if.hybrid') : r.cpuKind === 'amdX3D' ? t('rec.power.if.x3d') : '');
+}
 
 function OverviewPage({ junk, startup, perf, recs, go }) {
   const t = useT();
@@ -473,41 +485,15 @@ function StartupPage({ startup, onToggle, busy, prog }) {
 
 // Why a sensor has no reading yet, in the user's terms.
 const cpuNoteKey = (n) => ({ 'no service': 'cpuNote.noService', 'pawnio not installed': 'cpuNote.pawnio', 'cpu not supported yet': 'cpuNote.unsupported' }[n] || 'cpuNote.unavailable');
-const liquidNoteKey = (n) => ({
-  'no service': 'liquidNote.noService', 'corsair needs icue': 'liquidNote.needsIcue', 'no reading from icue': 'liquidNote.noReading', 'no supported cooler': 'liquidNote.noCooler',
-}[n] || 'liquidNote.unavailable');
 const rpm = (n, t) => ltr(`${Number(n).toLocaleString(t.locale)} RPM`);
-// Coolant runs much cooler than the CPU: about 30-40°C at rest is normal, past ~45°C is worth a look.
-const liquidClass = (c) => (c == null ? '' : c >= 48 ? 'temp-hot' : c >= 42 ? 'temp-warm' : 'temp-ok');
 
-// "Why is my PC hot?": plain-language findings from the readings, most important first.
+// "Why is my PC hot?": a plain-language finding from the CPU reading.
+// At rest a CPU usually sits around 30–50°C; warmer than that at idle is worth explaining.
 function coolingFindings(p, t) {
-  const out = [];
+  if (p.cpuTempC == null) return [];
   const idle = p.cpuLoad < 20;
-  const radiator = [].concat(p.fans || []).filter((f) => f.source === p.liquidSource).map((f) => f.rpm);
-  const fast = radiator.length && radiator.reduce((a, b) => a + b, 0) / radiator.length > 1700;
-  if (p.liquidTempC != null && p.liquidTempC >= 45) {
-    out.push({
-      level: 'warn',
-      text: t('fd.liquidHot', { t: p.liquidTempC, idle: idle ? t('fd.idle') : '' })
-        + (p.pumpRpm ? t('fd.pumpOk', { rpm: p.pumpRpm.toLocaleString(t.locale) }) : '')
-        + (fast ? t('fd.fansFast') : ''),
-      tips: t('fd.liquidTips'),
-    });
-  }
-  // At rest a CPU usually sits around 30–50°C; warmer than that at idle is worth explaining.
-  if (p.cpuTempC != null && idle && p.cpuTempC >= 55) {
-    out.push({
-      level: 'warn',
-      text: t(p.cpuTempC >= 70 ? 'fd.cpuHot' : 'fd.cpuWarm', { t: p.cpuTempC }),
-      tips: t(p.liquidTempC != null && p.liquidTempC < 42 ? 'fd.tipContact' : p.liquidTempC == null ? 'fd.tipNoLiquid' : 'fd.tipCheckCooling'),
-    });
-  }
-  // "Fine" only when what we can see supports it.
-  const cpuFine = p.cpuTempC != null && (!idle || p.cpuTempC < 55);
-  const liquidFine = p.liquidTempC == null || p.liquidTempC < 42;
-  if (!out.length && cpuFine && liquidFine) out.push({ level: 'ok', text: t('fd.ok') });
-  return out;
+  if (idle && p.cpuTempC >= 55) return [{ level: 'warn', text: t(p.cpuTempC >= 70 ? 'fd.cpuHot' : 'fd.cpuWarm', { t: p.cpuTempC }), tips: t('fd.tipCpu') }];
+  return [{ level: 'ok', text: t('fd.ok') }];
 }
 
 function PerfPage({ perf, onRefresh, onInstallService, busy }) {
@@ -526,20 +512,13 @@ function PerfPage({ perf, onRefresh, onInstallService, busy }) {
           <div className="stat"><span>{t('pf.ramUsed')}</span><b>{ltr(`${(perf.ramTotalGB - perf.ramFreeGB).toFixed(1)} GB`)}</b></div>
           <div className="stat"><span>{t('pf.ramFree')}</span><b>{ltr(`${perf.ramFreeGB} GB`)}</b></div>
         </div>
-        <div className="stats three">
+        <div className="stats two">
           <div className="stat" title={t('pf.cpuTempTitle')}>
             <span><Cpu size={13} /> {t('pf.cpuTemp')}</span>
             {perf.cpuTempC == null ? (<>
               <b className="na">—</b>
               <small>{t(cpuNoteKey(perf.cpuNote))}{perf.cpuNote === 'no service' && <> · <button className="link-btn" onClick={onInstallService} disabled={!!busy}>{t('pf.install')}</button></>}</small>
             </>) : <b className={tempClass(perf.cpuTempC)}>{ltr(`${perf.cpuTempC}°C`)}</b>}
-          </div>
-          <div className="stat" title={t('pf.liquidTitle')}>
-            <span><Droplets size={13} /> {t('pf.liquid')}</span>
-            {perf.liquidTempC == null ? <><b className="na">—</b><small>{t(liquidNoteKey(perf.liquidNote))}</small></> : (<>
-              <b className={liquidClass(perf.liquidTempC)}>{ltr(`${perf.liquidTempC}°C`)}</b>
-              <small>{perf.pumpRpm ? t('pf.pump', { rpm: rpm(perf.pumpRpm, t) }) : perf.liquidSource}</small>
-            </>)}
           </div>
           <div className="stat" title={gpu?.name || ''}>
             <span><Monitor size={13} /> {t('pf.gpuTemp')}</span>
@@ -585,6 +564,7 @@ function RecsPage({ recs, bios, onApply, onBiosDownload, onGuide, busy, prog }) 
               <div style={{ minWidth: 0 }}>
                 <div className="dname">{recTitle(r, t)} · <span style={{ fontWeight: 400 }}>{String(recValue(r, t)).replace(/\(?\d[\d.,:/-]*\)?(?:\s?(?:GB|MB))?/g, (m) => ltr(m))}</span></div>
                 <div className="dmeta" style={{ whiteSpace: 'normal' }}>{note}</div>
+                {ok === false && <div className="dmeta if-not">{recIf(r, t)}</div>}
               </div>
               <div className="acts">
                 {ok === true && <span className="ok-text">{t('ok')}</span>}
@@ -595,7 +575,7 @@ function RecsPage({ recs, bios, onApply, onBiosDownload, onGuide, busy, prog }) 
                 {isBios && !bios && <Loader2 size={15} className="spin" />}
                 {isBios && bios && !bios.supported && <button className="btn-ghost" onClick={() => api.openLink(bios.page || r.link)}><ExternalLink size={14} /> {t('rc.searchMaker')}</button>}
                 {r.action && !isBios && (busy === r.key ? <ProgressPill p={prog[r.key]} fallback={t('prog.applying')} />
-                  : <button className="btn-primary" disabled={!!busy} onClick={() => onApply(r)}>{t('rc.apply')}</button>)}
+                  : <button className="btn-primary" disabled={!!busy} onClick={() => onApply(r)}>{t(r.key === 'power' ? 'rc.applyPlan' : 'rc.apply')}</button>)}
               </div>
             </div>
           );

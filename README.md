@@ -21,12 +21,12 @@ The installer is not code-signed, so Windows SmartScreen warns on first run: cli
 **Optimization**
 - Cleanup (temp files older than a day, Windows Update leftovers, browser caches, thumbnails, crash reports), each with a link to its folder.
 - Startup apps on/off, recommended settings (power plan, game mode, GPU scheduling).
-- CPU, coolant and GPU temperatures, fans, what loads the CPU and memory, and plain-language findings on why the PC runs hot.
+- CPU and GPU temperatures, what loads the CPU and memory, and a plain-language finding when the CPU runs hot at rest.
 - History of every change, and restore points.
 
 ## Background service
 
-`service/TuneService.cs` runs as LocalSystem so privileged operations need no prompt each time. It listens on a named pipe that only users signed in at the PC can open, runs only the fixed operations in its `ops.ps1` (installed with it in Program Files), and reads sensors through [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) with the signed [PawnIO](https://pawnio.eu/) driver. Corsair Commander coolers are read passively while iCUE is open; Tune never writes to them.
+`service/TuneService.cs` runs as LocalSystem so privileged operations need no prompt each time. It listens on a named pipe that only users signed in at the PC can open, runs only the fixed operations in its `ops.ps1` (installed with it in Program Files), and reads the CPU and GPU temperatures through [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) with the signed [PawnIO](https://pawnio.eu/) driver. It does not touch coolers, motherboard chips or power supplies.
 
 ## Develop
 

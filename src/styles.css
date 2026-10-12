@@ -466,3 +466,7 @@ html[dir=ltr] .toggle::after { right: auto; left: 3px; transition: left .15s; }
 html[dir=ltr] .toggle.on::after { left: 17px; }
 .path-text { text-align: right; }
 html[dir=ltr] .path-text { text-align: left; }
+.stats.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+/* What happens if a recommendation is left as it is. */
+.dmeta.if-not { white-space: normal; color: #b45309; margin-top: 2px; }

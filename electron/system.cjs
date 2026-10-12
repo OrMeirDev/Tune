@@ -567,7 +567,7 @@ function adminStop() {
 
 // Tune Service (service/TuneService.cs) runs the same operations as LocalSystem, so once it is
 // installed nothing asks for approval. Without it, Tune falls back to the 10-minute admin session.
-const SERVICE_VERSION = '2';
+const SERVICE_VERSION = '3';
 const PIPE = '\\\\.\\pipe\\TuneService';
 // The official, signed PawnIO installer, pinned to the exact file checked when this was written.
 const PAWNIO_SETUP = {
@@ -785,11 +785,6 @@ async function performance() {
   Object.assign(r.data, {
     cpuTempC: d.cpuTempC ?? null,
     cpuNote: !s ? 'no service' : s.ok ? d.cpuNote : s.error,
-    liquidTempC: d.liquidTempC ?? null,
-    liquidSource: d.liquidSource || null,
-    liquidNote: !s ? 'no service' : d.liquidNote || null,
-    pumpRpm: d.pumpRpm ?? null,
-    fans: [].concat(d.fans || []),
   });
   // The service also knows the GPU hot spot; keep Windows' reading when the service isn't there.
   if ([].concat(d.gpus || []).length) r.data.gpuTemps = [].concat(d.gpus).map((g, i) => ({ ...g, fanRpm: r.data.gpuTemps?.[i]?.fanRpm ?? null }));
@@ -798,18 +793,51 @@ async function performance() {
 
 // ---------------- recommendations ----------------
 
-const recommendations = () => runPS(`
-$plan = (powercfg /getactivescheme) -replace '.*\\((.*)\\).*','$1'
+// The power plan each kind of processor's maker recommends. Intel (12th gen and later, with
+// performance + efficient cores) and AMD (Ryzen; X3D chips depend on it) both recommend Windows'
+// Balanced plan: full speed under load, rest in between. Older Intel desktops do fine with High
+// performance too. Laptops: Balanced.
+const PLAN_GUIDS = {
+  '381b4222-f694-41f0-9685-ff5bb260df2e': 'balanced',
+  '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c': 'high',
+  'e9a42b02-d5df-448d-aa00-03f14749eb61': 'ultimate',
+  'a1841308-3541-4fab-bc81-f71556f20b4a': 'saver',
+};
+// Built-in plans by their fixed ID; copies (Ultimate Performance is usually one) by name, which
+// Windows gives in its own language.
+const planKind = (guid, name) => PLAN_GUIDS[String(guid).toLowerCase()]
+  || (/ultimate|אולטימטיב|מרבי|מקסימלי/i.test(name) ? 'ultimate'
+    : /high perf|ביצועים גבוהים/i.test(name) ? 'high'
+      : /saver|חיסכון/i.test(name) ? 'saver'
+        : /balanced|מאוזן/i.test(name) ? 'balanced' : 'custom');
+function cpuKind(cpu) {
+  if (/Ryzen\s+9\s+(7900|7950|9900|9950)X3D/i.test(cpu)) return 'amdX3D';
+  if (/Ryzen|AMD/i.test(cpu)) return 'amd';
+  if (/Core\s*(\(TM\))?\s*Ultra|i[3579]-1[2-4]\d{3}|Core\s*(\(TM\))?\s*[3579]\s+\d{3}/i.test(cpu)) return 'intelHybrid';
+  if (/Intel/i.test(cpu)) return 'intel';
+  return 'other';
+}
+function powerAdvice(x) {
+  const plan = planKind(x.guid, x.value);
+  const kind = x.laptop ? 'laptop' : cpuKind(x.cpu);
+  const ok = plan === 'balanced' || (kind === 'intel' && plan === 'high');
+  return { ...x, plan, cpuKind: kind, recommended: 'balanced', ok, action: ok ? null : 'power' };
+}
+
+const recommendations = async () => {
+  const r = await runPS(`
+$scheme = [string](powercfg /getactivescheme)
+$planGuid = ([regex]::Match($scheme, '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')).Value
+$plan = ([regex]::Match($scheme, '\\(([^)]*)\\)\\s*$')).Groups[1].Value
+$laptop = [bool](Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue)
 $gm = (Get-ItemProperty 'HKCU:\\Software\\Microsoft\\GameBar' -ErrorAction SilentlyContinue).AutoGameModeEnabled
 $hags = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers' -ErrorAction SilentlyContinue).HwSchMode
 $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
 $bios = Get-CimInstance Win32_BIOS; $bb = Get-CimInstance Win32_BaseBoard
 $freeGB = [math]::Round((Get-PSDrive C).Free / 1GB); $sizeGB = [math]::Round(((Get-PSDrive C).Used + (Get-PSDrive C).Free) / 1GB)
-# Plain data only; the app words it in the user's language. Power plan names come from Windows
-# in its own language, so a Hebrew Windows ("ביצועים גבוהים") counts as high performance too.
-$fast = $plan -match 'High|Ultimate|ביצועים'
+# Plain data only; the app words it in the user's language and judges the power plan (powerAdvice).
 $result = @(
-  @{ key = 'power'; value = $plan; ok = $fast; action = $(if ($fast) { $null } else { 'power' }) }
+  @{ key = 'power'; value = $plan; guid = $planGuid; cpu = $cpu; laptop = $laptop }
   @{ key = 'gamemode'; on = ($gm -ne 0); ok = ($gm -ne 0); action = $(if ($gm -eq 0) { 'gamemode' } else { $null }) }
   @{ key = 'hags'; on = ($hags -eq 2); ok = ($hags -eq 2); action = $(if ($hags -eq 2) { $null } else { 'hags' }) }
   @{ key = 'disk'; freeGB = $freeGB; sizeGB = $sizeGB; ok = ($freeGB -gt 0.1 * $sizeGB); action = $null }
@@ -817,10 +845,14 @@ $result = @(
      intel1314 = ($cpu -match 'i[579]-1[34]\\d{3}')
      action = 'biosPage'; link = "https://www.google.com/search?q=$([uri]::EscapeDataString("$($bb.Manufacturer) $($bb.Product) BIOS"))" }
 )`);
+  if (r.ok) r.data = [].concat(r.data || []).map((x) => (x.key === 'power' ? powerAdvice(x) : x));
+  return r;
+};
 
 const applyRecommendation = (key) => {
   const scripts = {
-    power: { body: "$g = (powercfg /list | Select-String 'High performance|ביצועים גבוהים' | Select-Object -First 1).Line -replace '.*GUID: (\\S+).*','$1'; if (-not $g) { $g = '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c' }; powercfg /setactive $g; $result = 'ok'" },
+    // Windows' built-in Balanced plan, by its fixed ID (exists on every Windows).
+    power: { body: "powercfg /setactive 381b4222-f694-41f0-9685-ff5bb260df2e; $result = 'ok'" },
     gamemode: { body: "New-Item 'HKCU:\\Software\\Microsoft\\GameBar' -Force | Out-Null; Set-ItemProperty 'HKCU:\\Software\\Microsoft\\GameBar' -Name AutoGameModeEnabled -Value 1 -Type DWord; $result = 'ok'" },
   };
   if (key === 'hags') return privileged({ op: 'hags' });

@@ -1,6 +1,6 @@
 // Tune Service: runs as LocalSystem so Tune can install drivers and change system settings
-// without a UAC prompt each time, and reads hardware sensors through LibreHardwareMonitor (CPU and
-// motherboard via the PawnIO driver, GPUs, and USB coolers).
+// without a UAC prompt each time, and reads the CPU and GPU temperatures through LibreHardwareMonitor
+// (the CPU via the PawnIO driver).
 //
 // Safety model:
 // - It lives in Program Files (only administrators can change its files).
@@ -24,7 +24,6 @@ using System.Web.Script.Serialization;
 using Microsoft.Win32;
 using Microsoft.Win32.SafeHandles;
 using System.Linq;
-using HidSharp;
 using LibreHardwareMonitor.Hardware;
 
 namespace Tune
@@ -46,7 +45,7 @@ namespace Tune
 
     public class TuneService : ServiceBase
     {
-        public const string Version = "2";
+        public const string Version = "3";
         // Another name only for testing a new build next to the installed service (--console --pipe X).
         static string PipeName = "TuneService";
         const int MaxRequest = 64 * 1024;
@@ -239,8 +238,8 @@ namespace Tune
 
         // ---------- sensors (LibreHardwareMonitor) ----------
 
-        // One Computer stays open for the life of the service; each request refreshes it. CPU and
-        // motherboard sensors need the PawnIO driver; GPUs and USB coolers don't.
+        // One Computer stays open for the life of the service; each request refreshes it. Only the CPU
+        // (through the PawnIO driver) and the GPUs are read; coolers, boards and power supplies are not touched.
         static readonly object SensorLock = new object();
         static Computer computer;
 
@@ -248,7 +247,7 @@ namespace Tune
         {
             if (computer == null)
             {
-                var c = new Computer { IsCpuEnabled = true, IsGpuEnabled = true, IsMotherboardEnabled = true, IsControllerEnabled = true, IsPsuEnabled = true };
+                var c = new Computer { IsCpuEnabled = true, IsGpuEnabled = true };
                 c.Open();
                 computer = c;
             }
@@ -276,7 +275,6 @@ namespace Tune
         {
             var r = new Dictionary<string, object> { { "pawnio", PawnIoVersion() } };
             var gpus = new List<object>();
-            var fans = new List<object>();
             lock (SensorLock)
             {
                 var hw = All(Hw().Hardware).ToList();
@@ -298,98 +296,11 @@ namespace Tune
                         var hot = temps.FirstOrDefault(s => s.Name.Contains("Hot Spot"));
                         if (core != null) gpus.Add(new Dictionary<string, object> { { "name", h.Name }, { "tempC", Round(core.Value.Value) }, { "hotspotC", hot == null ? null : Round(hot.Value.Value) } });
                     }
-                    // Coolant: AIO controllers report it by name; some boards have "Water In/Out" headers.
-                    if (!r.ContainsKey("liquidTempC"))
-                    {
-                        var liquid = temps.FirstOrDefault(s => s.Name.IndexOf("liquid", StringComparison.OrdinalIgnoreCase) >= 0
-                            || s.Name.IndexOf("coolant", StringComparison.OrdinalIgnoreCase) >= 0 || s.Name.IndexOf("water", StringComparison.OrdinalIgnoreCase) >= 0);
-                        if (liquid != null) { r["liquidTempC"] = Math.Round(liquid.Value.Value, 1); r["liquidSource"] = h.Name; }
-                    }
-                    foreach (var s in h.Sensors)
-                    {
-                        if (s.SensorType != SensorType.Fan || !s.Value.HasValue || s.Value.Value <= 0) continue;
-                        if (s.Name.IndexOf("pump", StringComparison.OrdinalIgnoreCase) >= 0 && !r.ContainsKey("pumpRpm")) r["pumpRpm"] = Round(s.Value.Value);
-                        else if (fans.Count < 16) fans.Add(new Dictionary<string, object> { { "name", s.Name }, { "source", h.Name }, { "rpm", Round(s.Value.Value) } });
-                    }
                 }
-            }
-            if (!r.ContainsKey("liquidTempC"))
-            {
-                var corsair = CorsairLiquid.Read();
-                if (corsair.HasValue)
-                {
-                    r["liquidTempC"] = corsair.Value;
-                    r["liquidSource"] = "Corsair (iCUE)";
-                    r["pumpRpm"] = CorsairLiquid.PumpRpm;
-                    foreach (var rpm in CorsairLiquid.FanRpms) fans.Add(new Dictionary<string, object> { { "name", "Radiator fan" }, { "source", "Corsair (iCUE)" }, { "rpm", rpm } });
-                }
-                else r["liquidNote"] = CorsairLiquid.Note;
             }
             if (!r.ContainsKey("cpuTempC")) r["cpuNote"] = PawnIoVersion() == null ? "pawnio not installed" : "no reading";
             r["gpus"] = gpus;
-            r["fans"] = fans;
             return r;
-        }
-    }
-
-    // Corsair Commander Core/ST: Tune never sends it anything. While iCUE is open, iCUE asks the
-    // controller for its temperatures and speeds, and Windows hands every reply to each program that
-    // has the device open, so Tune just reads along. Reply layout (liquidctl's commander_core driver),
-    // after the report ID: 00 08 .. <type 2 bytes> <count> then per item:
-    //   temperatures (type 10 00): <0 = connected> <value x10, little-endian>  (sensor 0 = coolant)
-    //   speeds       (type 06 00): <rpm, little-endian>                         (speed 0 = pump)
-    static class CorsairLiquid
-    {
-        public static string Note;
-        public static int? PumpRpm;
-        public static List<int> FanRpms = new List<int>();
-        static readonly int[] Products = { 0x0C1C, 0x0C2A, 0x0C32 };
-
-        public static double? Read()
-        {
-            Note = null;
-            PumpRpm = null;
-            FanRpms = new List<int>();
-            var devices = DeviceList.Local.GetHidDevices(0x1B1C).Where(d => Products.Contains(d.ProductID)).ToList();
-            if (devices.Count == 0) { Note = "no supported cooler"; return null; }
-            if (Process.GetProcessesByName("iCUE").Length == 0) { Note = "corsair needs icue"; return null; }
-            double? liquid = null;
-            foreach (var d in devices)
-            {
-                if (d.GetMaxInputReportLength() < 64) continue;
-                HidStream stream;
-                if (!d.TryOpen(out stream)) continue;
-                using (stream)
-                {
-                    stream.ReadTimeout = 400;
-                    var buf = new byte[d.GetMaxInputReportLength()];
-                    var end = DateTime.UtcNow.AddSeconds(3);
-                    while (DateTime.UtcNow < end && (liquid == null || PumpRpm == null))
-                    {
-                        int n;
-                        try { n = stream.Read(buf, 0, buf.Length); } catch (System.TimeoutException) { continue; } catch (IOException) { break; }
-                        if (n < 10 || buf[1] != 0x00 || buf[2] != 0x08 || buf[5] != 0x00) continue;
-                        int count = buf[6];
-                        if (buf[4] == 0x10 && liquid == null)
-                        {
-                            for (int i = 0; i < count && 9 + i * 3 < n; i++)
-                                if (buf[7 + i * 3] == 0x00) { liquid = Math.Round((buf[8 + i * 3] | (buf[9 + i * 3] << 8)) / 10.0, 1); break; }
-                        }
-                        else if (buf[4] == 0x06 && PumpRpm == null && count > 0)
-                        {
-                            PumpRpm = buf[7] | (buf[8] << 8);
-                            for (int i = 1; i < count && 8 + i * 2 < n; i++)
-                            {
-                                int rpm = buf[7 + i * 2] | (buf[8 + i * 2] << 8);
-                                if (rpm > 0) FanRpms.Add(rpm);
-                            }
-                        }
-                    }
-                }
-                if (liquid != null) return liquid;
-            }
-            Note = "no reading from icue";
-            return null;
         }
     }
 }

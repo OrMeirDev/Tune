@@ -13,4 +13,4 @@ These are the unmodified files from the official LibreHardwareMonitor 0.9.6 rele
 
 Not bundled, downloaded during setup from the official release and checked (SHA-256 and signature): the PawnIO driver installer (https://github.com/namazso/PawnIO.Setup).
 
-The CPU-temperature and Corsair reading logic follows LibreHardwareMonitor and liquidctl (https://github.com/liquidctl/liquidctl) as references.
+The CPU-temperature reading follows LibreHardwareMonitor.
