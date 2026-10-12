@@ -1,6 +1,6 @@
 {
   "name": "tune",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Tune - driver updater and PC optimizer",
   "author": "Or meir Tzarfati",
   "main": "electron/main.cjs",
