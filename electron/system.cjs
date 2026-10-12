@@ -337,13 +337,13 @@ const enableDevice = (id) => privileged({ op: 'enable', id: String(id) });
 // Each category is a folder whose *contents* can go; files in use are skipped, never forced.
 const JUNK = `
 $cats = @(
-  @{ key = 'userTemp'; label = 'קבצים זמניים שלך'; paths = @($env:TEMP); admin = $false; minAgeHours = 24 }
-  @{ key = 'winTemp'; label = 'קבצים זמניים של Windows'; paths = @("$env:SystemRoot\\Temp"); admin = $true; minAgeHours = 24 }
-  @{ key = 'wuCache'; label = 'קבצי התקנה של Windows Update'; paths = @("$env:SystemRoot\\SoftwareDistribution\\Download"); admin = $true; minAgeHours = 24 }
-  @{ key = 'browser'; label = 'מטמון דפדפנים'; paths = @("$env:LOCALAPPDATA\\Google\\Chrome\\User Data\\Default\\Cache", "$env:LOCALAPPDATA\\Microsoft\\Edge\\User Data\\Default\\Cache", "$env:LOCALAPPDATA\\BraveSoftware\\Brave-Browser\\User Data\\Default\\Cache"); admin = $false }
-  @{ key = 'thumbs'; label = 'מטמון תמונות ממוזערות'; paths = @("$env:LOCALAPPDATA\\Microsoft\\Windows\\Explorer"); filter = 'thumbcache_*.db'; admin = $false }
-  @{ key = 'dumps'; label = 'דוחות קריסה של Windows'; paths = @("$env:SystemRoot\\Minidump", "$env:SystemRoot\\LiveKernelReports"); admin = $true }
-  @{ key = 'appDumps'; label = 'דוחות קריסה של תוכנות'; paths = @("$env:LOCALAPPDATA\\CrashDumps"); admin = $false }
+  @{ key = 'userTemp'; paths = @($env:TEMP); admin = $false; minAgeHours = 24 }
+  @{ key = 'winTemp'; paths = @("$env:SystemRoot\\Temp"); admin = $true; minAgeHours = 24 }
+  @{ key = 'wuCache'; paths = @("$env:SystemRoot\\SoftwareDistribution\\Download"); admin = $true; minAgeHours = 24 }
+  @{ key = 'browser'; paths = @("$env:LOCALAPPDATA\\Google\\Chrome\\User Data\\Default\\Cache", "$env:LOCALAPPDATA\\Microsoft\\Edge\\User Data\\Default\\Cache", "$env:LOCALAPPDATA\\BraveSoftware\\Brave-Browser\\User Data\\Default\\Cache"); admin = $false }
+  @{ key = 'thumbs'; paths = @("$env:LOCALAPPDATA\\Microsoft\\Windows\\Explorer"); filter = 'thumbcache_*.db'; admin = $false }
+  @{ key = 'dumps'; paths = @("$env:SystemRoot\\Minidump", "$env:SystemRoot\\LiveKernelReports"); admin = $true }
+  @{ key = 'appDumps'; paths = @("$env:LOCALAPPDATA\\CrashDumps"); admin = $false }
 )
 function Files($c) {
   # Temp folders: only files untouched for a day, so programs that are open right now keep theirs.
@@ -354,7 +354,7 @@ function Files($c) {
 
 const junkScan = () => runPS(`${JUNK}
 $result = @(foreach ($c in $cats) { $f = @(Files $c)
-  @{ key = $c.key; label = $c.label; admin = $c.admin; bytes = [int64](($f | Measure-Object Length -Sum).Sum); files = $f.Count; minAgeHours = $c.minAgeHours; dirs = @($c.paths | Where-Object { Test-Path -LiteralPath $_ }) } })`);
+  @{ key = $c.key; admin = $c.admin; bytes = [int64](($f | Measure-Object Length -Sum).Sum); files = $f.Count; minAgeHours = $c.minAgeHours; dirs = @($c.paths | Where-Object { Test-Path -LiteralPath $_ }) } })`);
 
 // Only the fixed categories above can be cleaned, whatever keys arrive.
 const CLEAN_OP = `
@@ -805,13 +805,16 @@ $hags = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDr
 $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
 $bios = Get-CimInstance Win32_BIOS; $bb = Get-CimInstance Win32_BaseBoard
 $freeGB = [math]::Round((Get-PSDrive C).Free / 1GB); $sizeGB = [math]::Round(((Get-PSDrive C).Used + (Get-PSDrive C).Free) / 1GB)
+# Plain data only; the app words it in the user's language. Power plan names come from Windows
+# in its own language, so a Hebrew Windows ("ביצועים גבוהים") counts as high performance too.
+$fast = $plan -match 'High|Ultimate|ביצועים'
 $result = @(
-  @{ key = 'power'; title = 'תוכנית צריכת חשמל'; value = $plan; ok = ($plan -match 'High|Ultimate|ביצועים'); note = 'במחשב שולחני, ביצועים גבוהים או Ultimate Performance' ; action = $(if ($plan -match 'High|Ultimate|ביצועים') { $null } else { 'power' }) }
-  @{ key = 'gamemode'; title = 'מצב משחק'; value = $(if ($gm -eq 0) { 'כבוי' } else { 'פועל' }); ok = ($gm -ne 0); note = 'Windows נותן עדיפות למשחק שרץ'; action = $(if ($gm -eq 0) { 'gamemode' } else { $null }) }
-  @{ key = 'hags'; title = 'תזמון GPU בחומרה'; value = $(if ($hags -eq 2) { 'פועל' } else { 'כבוי' }); ok = ($hags -eq 2); note = 'מוריד עיכוב בכרטיסי מסך חדשים. נדרשת הפעלה מחדש'; action = $(if ($hags -eq 2) { $null } else { 'hags' }) }
-  @{ key = 'disk'; title = 'מקום פנוי בכונן C'; value = "$freeGB GB מתוך $sizeGB GB"; ok = ($freeGB -gt 0.1 * $sizeGB); note = 'מתחת ל-10% פנוי, Windows מאט'; action = $null }
-  @{ key = 'bios'; title = 'גרסת BIOS'; value = "$($bios.SMBIOSBIOSVersion) ($($bios.ReleaseDate.ToString('yyyy-MM-dd')))"; ok = $null
-     note = $(if ($cpu -match 'i[579]-1[34]\\d{3}') { 'למעבדי Intel דור 13–14 יש תיקון יציבות שמגיע בעדכון BIOS. כדאי לבדוק באתר יצרן הלוח' } else { 'כדאי לבדוק מדי פעם באתר יצרן הלוח' })
+  @{ key = 'power'; value = $plan; ok = $fast; action = $(if ($fast) { $null } else { 'power' }) }
+  @{ key = 'gamemode'; on = ($gm -ne 0); ok = ($gm -ne 0); action = $(if ($gm -eq 0) { 'gamemode' } else { $null }) }
+  @{ key = 'hags'; on = ($hags -eq 2); ok = ($hags -eq 2); action = $(if ($hags -eq 2) { $null } else { 'hags' }) }
+  @{ key = 'disk'; freeGB = $freeGB; sizeGB = $sizeGB; ok = ($freeGB -gt 0.1 * $sizeGB); action = $null }
+  @{ key = 'bios'; version = $bios.SMBIOSBIOSVersion; date = $bios.ReleaseDate.ToString('yyyy-MM-dd'); ok = $null
+     intel1314 = ($cpu -match 'i[579]-1[34]\\d{3}')
      action = 'biosPage'; link = "https://www.google.com/search?q=$([uri]::EscapeDataString("$($bb.Manufacturer) $($bb.Product) BIOS"))" }
 )`);
 

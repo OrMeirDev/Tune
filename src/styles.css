@@ -23,7 +23,7 @@ body {
 }
 button { font: inherit; color: inherit; cursor: pointer; border: none; background: none; }
 
-.app { display: flex; height: 100%; direction: rtl; }
+.app { display: flex; height: 100%; }
 
 .sidebar {
   width: 240px; flex-shrink: 0; background: #fbfbfe; border-inline-start: 1px solid var(--border);
@@ -189,7 +189,7 @@ h2 { font-size: 22px; font-weight: 600; display: flex; align-items: center; gap:
 .more-sites:hover { filter: brightness(.97); }
 
 .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 16, 30, .45); display: flex; align-items: center; justify-content: center; z-index: 50; padding: 24px; }
-.modal { background: var(--card); border-radius: 20px; width: min(760px, 100%); max-height: 85vh; display: flex; flex-direction: column; padding: 22px 24px; box-shadow: 0 24px 60px rgba(20, 20, 40, .25); direction: rtl; }
+.modal { background: var(--card); border-radius: 20px; width: min(760px, 100%); max-height: 85vh; display: flex; flex-direction: column; padding: 22px 24px; box-shadow: 0 24px 60px rgba(20, 20, 40, .25); }
 .modal-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 16px; }
 .modal .search { margin-bottom: 12px; }
 .verdict { display: flex; align-items: flex-start; gap: 10px; padding: 12px 16px; border-radius: 12px; margin-bottom: 12px; font-size: 15px; line-height: 1.5; }
@@ -459,3 +459,10 @@ h2 { font-size: 15px; }
 .finding b { font-weight: 600; }
 .finding.warn { background: #fff7ed; color: #9a3412; }
 .finding.ok { background: var(--accent-soft); color: var(--accent); }
+/* Direction follows the language (<html dir> is set by the app). These few places are drawn
+   for right-to-left and are mirrored for English. */
+html[dir=ltr] .brand { flex-direction: row; }
+html[dir=ltr] .toggle::after { right: auto; left: 3px; transition: left .15s; }
+html[dir=ltr] .toggle.on::after { left: 17px; }
+.path-text { text-align: right; }
+html[dir=ltr] .path-text { text-align: left; }

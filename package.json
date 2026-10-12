@@ -74,11 +74,14 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Tune",
       "installerLanguages": [
+        "en_US",
         "he_IL"
       ],
-      "language": "1037",
+      "language": "1033",
       "artifactName": "Tune-Setup-${version}.${ext}",
-      "include": "build/installer.nsh"
+      "include": "build/installer.nsh",
+      "multiLanguageInstaller": true,
+      "displayLanguageSelector": false
     }
   }
 }

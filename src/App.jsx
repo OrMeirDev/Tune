@@ -1,104 +1,95 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   SlidersHorizontal, RefreshCw, Cpu, Sparkles, Trash2, Rocket, Thermometer, Settings2, History, Settings, Home,
-  ChevronLeft, Download, Monitor, Wifi, Bluetooth, Network, Volume2, HardDrive, Usb, Camera, AlertTriangle, Check,
+  ChevronLeft, ChevronRight, Download, Monitor, Wifi, Bluetooth, Network, Volume2, HardDrive, Usb, Camera, AlertTriangle, Check,
   Loader2, ShieldCheck, ExternalLink, Search, Undo2, RotateCcw, FolderOpen, FileSpreadsheet, FileText, Droplets,
-  CircuitBoard, ScanSearch, Info, X,
+  CircuitBoard, ScanSearch, Info, X, Globe,
 } from 'lucide-react';
+import { LangContext, makeT, useT } from './i18n.js';
 
 const api = window.tune;
 
 const PAGES = [
-  { group: 'דרייברים' },
-  { id: 'updates', icon: RefreshCw, label: 'עדכונים' },
-  { id: 'hardware', icon: Cpu, label: 'החומרה שלי' },
-  { group: 'מיטוב' },
-  { id: 'overview', icon: Sparkles, label: 'סקירה' },
-  { id: 'clean', icon: Trash2, label: 'ניקוי' },
-  { id: 'startup', icon: Rocket, label: 'הפעלה עם Windows' },
-  { id: 'perf', icon: Thermometer, label: 'מעבד וזיכרון' },
-  { id: 'recs', icon: Settings2, label: 'הגדרות מומלצות' },
+  { group: 'nav.drivers' },
+  { id: 'updates', icon: RefreshCw, key: 'nav.updates' },
+  { id: 'hardware', icon: Cpu, key: 'nav.hardware' },
+  { group: 'nav.optimize' },
+  { id: 'overview', icon: Sparkles, key: 'nav.overview' },
+  { id: 'clean', icon: Trash2, key: 'nav.clean' },
+  { id: 'startup', icon: Rocket, key: 'nav.startup' },
+  { id: 'perf', icon: Thermometer, key: 'nav.perf' },
+  { id: 'recs', icon: Settings2, key: 'nav.recs' },
   { group: '' },
-  { id: 'history', icon: History, label: 'היסטוריה ושחזור' },
-  { id: 'settings', icon: Settings, label: 'הגדרות' },
+  { id: 'history', icon: History, key: 'nav.history' },
+  { id: 'settings', icon: Settings, key: 'nav.settings' },
 ];
-const pageLabel = (id) => PAGES.find((p) => p.id === id)?.label || '';
 
-// Keeps "8.67 GB" in reading order inside Hebrew text.
-const ltr = (s) => '\u2066' + s + '\u2069';
+// Keeps "8.67 GB" in reading order inside Hebrew text (harmless in English).
+const ltr = (s) => '⁦' + s + '⁩';
 const fmtGB = (b) => ltr(b >= 1e9 ? `${(b / 1e9).toFixed(2)} GB` : `${Math.round(b / 1e6)} MB`);
-const fmtDate = (iso) => (iso ? new Date(iso).toLocaleString('he-IL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
+const fmtDate = (iso, t) => (iso ? new Date(iso).toLocaleString(t.locale, { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
 // Intel stamps some chipset drivers 1968-07-18 on purpose; it is not an old driver.
 const shownDate = (d) => (!d || d.startsWith('1968') ? '—' : d);
-const errText = (e) => ({
-  cancelled: 'הפעולה בוטלה (לא אושרה הרשאת מנהל)',
-  'admin session ended': 'הרשאת המנהל הופסקה באמצע הפעולה. אפשר לנסות שוב.',
-  'checksum mismatch': 'הקובץ שהורד לא תאם לחתימה שהיצרן פרסם, ולכן נמחק. כדאי לנסות שוב.',
-  'signature check failed': 'החתימה הדיגיטלית של הקובץ לא אומתה כשל היצרן, ולכן הוא נמחק ולא נפתח.',
-}[e] || `הפעולה נכשלה: ${e}`);
+const errText = (e, t) => ({
+  cancelled: t('err.cancelled'),
+  'admin session ended': t('err.adminEnded'),
+  'checksum mismatch': t('err.checksum'),
+  'signature check failed': t('err.signature'),
+}[e] || t('err.generic', { e }));
 const mmss = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
 const tempClass = (c) => (c == null ? '' : c >= 85 ? 'temp-hot' : c >= 70 ? 'temp-warm' : 'temp-ok');
+// "**bold**" inside a translated string.
+const rich = (s) => String(s).split(/\*\*(.+?)\*\*/g).map((part, i) => (i % 2 ? <b key={i}>{part}</b> : part));
+// A translated label when the key is known; otherwise the stored text (older history entries).
+const tOr = (t, key, fallback) => { const s = t(key); return s === key ? fallback : s; };
 
 // What a long job is doing right now: approval, restore point, download %, install %.
 function ProgressPill({ p, fallback }) {
-  const label = {
-    auth: 'ממתין לאישור מנהל…', restore: 'יוצר נקודת שחזור…', prepare: 'מכין…', download: 'מוריד', install: 'מתקין',
-    service: 'מתקין את השירות…', pawnio: 'מתקין את PawnIO…', start: 'מפעיל את השירות…',
-  }[p?.phase] || fallback;
+  const t = useT();
+  const label = ['auth', 'restore', 'prepare', 'download', 'install', 'service', 'pawnio', 'start'].includes(p?.phase) ? t(`prog.${p.phase}`) : fallback;
   const pct = p && ['download', 'install'].includes(p.phase) && p.percent != null ? p.percent : null;
   return (
     <span className="pill prog-pill">
       <Loader2 size={13} className="spin" />
       {label}{pct != null ? ` ${pct}%` : p && ['download', 'install'].includes(p.phase) ? '…' : ''}
-      {p?.count > 1 && p.index ? ` · ${p.index} מתוך ${p.count}` : ''}
+      {p?.count > 1 && p.index ? t('prog.ofN', { i: p.index, n: p.count }) : ''}
       {pct != null && <span className="mini-bar"><i style={{ width: `${pct}%` }} /></span>}
     </span>
   );
 }
 
-// BIOS can't be updated from Windows safely, so Tune downloads the verified file and explains
-// the board maker's own update tool.
+// BIOS can't be updated from Windows safely on most boards, so Tune downloads the verified file
+// and explains the maker's own update tool.
 function BiosGuide({ bios, onClose, onDownload, busy, prog }) {
+  const t = useT();
   if (!bios) return null;
   const l = bios.latest;
+  const m = { maker: bios.maker };
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="modal guide" onClick={(e) => e.stopPropagation()}>
         <div className="modal-head">
           <div>
-            <h2>עדכון BIOS · {bios.model}</h2>
-            <div className="dmeta">מותקן {bios.installed} ({bios.installedDate}) ← זמין <b>{l.version}</b> ({l.date}) · {ltr(l.size)}</div>
+            <h2>{t('guide.title', { model: bios.model })}</h2>
+            <div className="dmeta">{t('guide.installed', { v: bios.installed, d: bios.installedDate })} {t('arrow')} {t('guide.available')} <b>{l.version}</b> ({l.date}) · {ltr(l.size)}</div>
           </div>
-          <button className="icon-btn ghost" onClick={onClose} aria-label="סגור"><X size={16} /></button>
+          <button className="icon-btn ghost" onClick={onClose} aria-label={t('close')}><X size={16} /></button>
         </div>
         <div className="guide-body">
-          {l.notes && <><div className="setting-title">מה חדש לפי {bios.maker}</div><div className="notes" dir="ltr">{l.notes}</div></>}
+          {l.notes && <><div className="setting-title">{t('guide.whatsNew', m)}</div><div className="notes" dir="ltr">{l.notes}</div></>}
           {bios.flash === 'windows' ? (<>
-            <div className="setting-title">איך מתקינים (הכלי הרשמי של {bios.maker}, מתוך Windows)</div>
-            <ol>
-              <li>מורידים את הקובץ (הכפתור למטה). Tune בודק שהוא זהה למה ש-{bios.maker} פרסמה ושהוא חתום על ידה.</li>
-              <li>שומרים עבודה וסוגרים תוכנות. במחשב נייד: מחברים למטען.</li>
-              <li>אם BitLocker מופעל, כדאי שמפתח השחזור יהיה זמין (נמצא בחשבון Microsoft). הכלים של {bios.maker} בדרך כלל משהים אותו לבד.</li>
-              <li>מפעילים את הקובץ שהורד ועוקבים אחרי ההוראות שלו.</li>
-              <li>המחשב יופעל מחדש ויעדכן את ה-BIOS. זה לוקח כמה דקות, ייתכן מסך שחור או כמה הפעלות מחדש.</li>
-            </ol>
+            <div className="setting-title">{t('guide.winTitle', m)}</div>
+            <ol>{[1, 2, 3, 4, 5].map((i) => <li key={i}>{rich(t(`guide.win${i}`, m))}</li>)}</ol>
           </>) : (<>
-            <div className="setting-title">איך מתקינים (ASUS EZ Flash, מתוך ה-BIOS)</div>
-            <ol>
-              <li>מורידים את הקובץ (הכפתור למטה). Tune בודק שהוא זהה לחתימה ש-ASUS פרסמה.</li>
-              <li>מעתיקים את קובץ ה-ZIP לדיסק און קי בפורמט FAT32.</li>
-              <li>מפעילים מחדש ולוחצים <b>Delete</b> כשהמחשב עולה, כדי להיכנס ל-BIOS.</li>
-              <li><b>F7</b> למצב Advanced ← לשונית <b>Tool</b> ← <b>ASUS EZ Flash 3 Utility</b>.</li>
-              <li>בוחרים את הדיסק און קי ואת הקובץ, ומאשרים. העדכון לוקח כמה דקות והמחשב יופעל מחדש לבד.</li>
-              <li>אחרי העדכון ההגדרות חוזרות לברירת מחדל: אם הפעלת XMP/EXPO לזיכרון, צריך להפעיל שוב.</li>
-            </ol>
+            <div className="setting-title">{t('guide.ezTitle')}</div>
+            <ol>{[1, 2, 3, 4, 5, 6].map((i) => <li key={i}>{rich(t(`guide.ez${i}`))}</li>)}</ol>
           </>)}
-          <div className="warn-box"><AlertTriangle size={14} /> לא לכבות ולא לנתק חשמל בזמן העדכון. כדאי לעדכן כשאין עבודה פתוחה.</div>
+          <div className="warn-box"><AlertTriangle size={14} /> {t('guide.warn')}</div>
         </div>
         <div className="modal-actions">
-          {busy ? <ProgressPill p={prog} fallback="מוריד…" />
-            : <button className="btn-primary" onClick={onDownload}><Download size={14} /> הורד ({ltr(l.size)})</button>}
-          <button className="btn-ghost" onClick={() => api.openLink(bios.page)}><ExternalLink size={14} /> דף ה-BIOS הרשמי</button>
+          {busy ? <ProgressPill p={prog} fallback={t('prog.downloading')} />
+            : <button className="btn-primary" onClick={onDownload}><Download size={14} /> {t('guide.download', { size: ltr(l.size) })}</button>}
+          <button className="btn-ghost" onClick={() => api.openLink(bios.page)}><ExternalLink size={14} /> {t('guide.page')}</button>
         </div>
       </div>
     </div>
@@ -108,33 +99,34 @@ function BiosGuide({ bios, onClose, onDownload, busy, prog }) {
 // With the background service running nothing asks for approval; otherwise one approval covers
 // 10 minutes, with a countdown and a way to end it early.
 function AdminChip({ service, until, onStart, onStop, onInstall, busy }) {
+  const t = useT();
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     if (until <= Date.now()) return undefined;
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
   }, [until]);
   if (service?.running && service.current) {
-    return <div className="admin-chip on" title="פעולות שדורשות הרשאת מנהל עוברות דרך שירות הרקע של Tune"><ShieldCheck size={14} /> שירות רקע פעיל · בלי אישורים</div>;
+    return <div className="admin-chip on" title={t('admin.serviceOnTitle')}><ShieldCheck size={14} /> {t('admin.serviceOn')}</div>;
   }
   if (service?.installed) {
-    return <button className="admin-chip" onClick={onInstall} disabled={!!busy}><ShieldCheck size={14} /> {service.running ? 'יש עדכון לשירות הרקע' : 'שירות הרקע לא פועל · הפעל'}</button>;
+    return <button className="admin-chip" onClick={onInstall} disabled={!!busy}><ShieldCheck size={14} /> {t(service.running ? 'admin.serviceUpdate' : 'admin.serviceStopped')}</button>;
   }
   const left = until - now;
   if (left > 0) {
     return (
-      <div className="admin-chip on" title="פעולות שדורשות הרשאת מנהל לא יבקשו אישור נוסף עד שהזמן נגמר">
-        <ShieldCheck size={14} /> הרשאת מנהל · {mmss(left)}
-        <button onClick={onStop} disabled={!!busy}>סיים</button>
+      <div className="admin-chip on" title={t('admin.activeTitle')}>
+        <ShieldCheck size={14} /> {t('admin.active', { t: mmss(left) })}
+        <button onClick={onStop} disabled={!!busy}>{t('admin.end')}</button>
       </div>
     );
   }
   return (
     <>
-      <button className="admin-chip" onClick={onStart} disabled={!!busy} title="אישור אחד שמכסה את כל הפעולות ל-10 דקות">
-        <ShieldCheck size={14} /> הרשאת מנהל ל-10 דקות
+      <button className="admin-chip" onClick={onStart} disabled={!!busy} title={t('admin.startTitle')}>
+        <ShieldCheck size={14} /> {t('admin.start')}
       </button>
-      <button className="admin-link" onClick={onInstall} disabled={!!busy} title="אישור אחד עכשיו, ואחר כך בלי אישורים בכלל">או התקן שירות רקע</button>
+      <button className="admin-link" onClick={onInstall} disabled={!!busy} title={t('admin.installTitle')}>{t('admin.install')}</button>
     </>
   );
 }
@@ -153,31 +145,33 @@ function classIcon(cls = '', name = '') {
 }
 
 // Pull the version out of a Windows Update driver title such as "Intel ... Update (24.70.0.4)".
-const titleVersion = (t = '') => (t.match(/(\d+\.\d+(?:\.\d+){1,2})(?!.*\d+\.\d+)/) || [])[1] || null;
+const titleVersion = (s = '') => (s.match(/(\d+\.\d+(?:\.\d+){1,2})(?!.*\d+\.\d+)/) || [])[1] || null;
 
 function Banner({ msg, onClose }) {
+  const t = useT();
   if (!msg) return null;
   return (
     <div className={`banner ${msg.kind || 'info'}`}>
       {msg.kind === 'err' ? <AlertTriangle size={16} /> : <Check size={16} />}
       <span>{msg.text}</span>
-      <button className="btn-ghost" onClick={onClose}>סגור</button>
+      <button className="btn-ghost" onClick={onClose}>{t('close')}</button>
     </div>
   );
 }
 
 function UpdateBanner({ status }) {
+  const t = useT();
   if (!status || !['available', 'downloading', 'ready'].includes(status.state)) return null;
   return (
     <div className="banner info">
       <Sparkles size={16} />
       <span>
-        {status.state === 'available' && <>גרסה חדשה של Tune זמינה: <b>{status.version}</b></>}
-        {status.state === 'downloading' && <>מוריד את העדכון… {status.percent || 0}%</>}
-        {status.state === 'ready' && <>העדכון לגרסה <b>{status.version}</b> מוכן.</>}
+        {status.state === 'available' && <>{t('upd.available')} <b>{status.version}</b></>}
+        {status.state === 'downloading' && t('upd.downloading', { p: status.percent || 0 })}
+        {status.state === 'ready' && t('upd.ready', { v: status.version })}
       </span>
-      {status.state === 'available' && <button className="btn-primary" onClick={() => api.downloadAppUpdate()}><Download size={14} /> עדכן עכשיו</button>}
-      {status.state === 'ready' && <button className="btn-primary" onClick={() => api.installAppUpdate()}><RefreshCw size={14} /> הפעל מחדש</button>}
+      {status.state === 'available' && <button className="btn-primary" onClick={() => api.downloadAppUpdate()}><Download size={14} /> {t('upd.now')}</button>}
+      {status.state === 'ready' && <button className="btn-primary" onClick={() => api.installAppUpdate()}><RefreshCw size={14} /> {t('upd.restart')}</button>}
     </div>
   );
 }
@@ -185,6 +179,7 @@ function UpdateBanner({ status }) {
 // ---------------- driver updates ----------------
 
 function UpdatesPage({ hw, wu, gpu, bios, scan, onScan, onInstall, onGpu, onBiosDownload, onGuide, onEnable, busy, prog }) {
+  const t = useT();
   const loading = !!scan.running;
   const devByHwid = useMemo(() => {
     const m = new Map();
@@ -204,39 +199,39 @@ function UpdatesPage({ hw, wu, gpu, bios, scan, onScan, onInstall, onGpu, onBios
     <>
       <header className="page-header">
         <div>
-          <h1>עדכוני דרייברים</h1>
-          <p className="subtitle">{hw ? `${hw.board} · ${hw.cpu.replace(/\(R\)|\(TM\)/g, '')} · ${hw.gpus.map((g) => g.name).join(', ')}` : 'סורק את המחשב…'}</p>
+          <h1>{t('up.title')}</h1>
+          <p className="subtitle">{hw ? `${hw.board} · ${hw.cpu.replace(/\(R\)|\(TM\)/g, '')} · ${hw.gpus.map((g) => g.name).join(', ')}` : t('up.scanningPc')}</p>
           <div className="scan-line">
             {loading ? (<>
               <span className="progress"><div style={{ width: `${Math.round((scan.step / scan.total) * 100)}%` }} /></span>
-              <span>שלב {scan.step} מתוך {scan.total}: {scan.label}</span>
-            </>) : scan.at ? <span>נסרק לאחרונה {new Date(scan.at).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' })}</span> : null}
+              <span>{t('up.step', { n: scan.step, total: scan.total, label: scan.label ? t(scan.label) : '' })}</span>
+            </>) : scan.at ? <span>{t('up.lastScan', { time: new Date(scan.at).toLocaleTimeString(t.locale, { hour: '2-digit', minute: '2-digit' }) })}</span> : null}
           </div>
         </div>
-        <button className="btn-primary" onClick={onScan} disabled={loading || !!busy} title="דרייברים, BIOS, כרטיס מסך, קבצים, הפעלה, הגדרות וביצועים">
-          {loading ? <Loader2 size={14} className="spin" /> : <ScanSearch size={14} />} סריקה מלאה עכשיו
+        <button className="btn-primary" onClick={onScan} disabled={loading || !!busy} title={t('up.scanTitle')}>
+          {loading ? <Loader2 size={14} className="spin" /> : <ScanSearch size={14} />} {t('up.scanNow')}
         </button>
       </header>
       <div className="stats">
-        <div className="stat"><span>רכיבים שנסרקו</span><b>{hw ? hw.devices.length : '…'}</b></div>
-        <div className="stat"><span>עדכונים זמינים</span><b style={{ color: 'var(--accent)' }}>{loading ? '…' : total}</b></div>
-        <div className="stat"><span>מעודכנים</span><b>{hw && !loading ? hw.devices.length - (wu?.length || 0) : '…'}</b></div>
-        <div className="stat"><span>דורשים תשומת לב</span><b style={{ color: problems.length ? '#b45309' : undefined }}>{hw ? problems.length : '…'}</b></div>
+        <div className="stat"><span>{t('up.stScanned')}</span><b>{hw ? hw.devices.length : '…'}</b></div>
+        <div className="stat"><span>{t('up.stAvailable')}</span><b style={{ color: 'var(--accent)' }}>{loading ? '…' : total}</b></div>
+        <div className="stat"><span>{t('up.stUpToDate')}</span><b>{hw && !loading ? hw.devices.length - (wu?.length || 0) : '…'}</b></div>
+        <div className="stat"><span>{t('up.stAttention')}</span><b style={{ color: problems.length ? '#b45309' : undefined }}>{hw ? problems.length : '…'}</b></div>
       </div>
       <section className="panel">
-        <div className="panel-title">עדכונים זמינים {loading && <Loader2 size={15} className="spin" />}</div>
-        {!loading && total === 0 && <div className="center-msg"><Check size={18} /> כל הדרייברים מעודכנים לפי המקורות הרשמיים</div>}
+        <div className="panel-title">{t('up.available')} {loading && <Loader2 size={15} className="spin" />}</div>
+        {!loading && total === 0 && <div className="center-msg"><Check size={18} /> {t('up.allGood')}</div>}
         {biosNewer && (
           <div className="drow">
             <span className="dicon"><CircuitBoard size={17} /></span>
             <div style={{ minWidth: 0 }}>
-              <div className="dname"><bdi>BIOS · {biosNewer.model}</bdi><span className="src">{biosNewer.site} · רשמי</span></div>
-              <div className="dmeta">{biosNewer.installed} ← <b>{biosNewer.latest.version}</b> · {biosNewer.latest.date} · {ltr(biosNewer.latest.size)} · {biosNewer.flash === 'windows' ? `מתקינים מ-Windows עם הכלי של ${biosNewer.maker}` : 'מתקינים מתוך ה-BIOS'}</div>
+              <div className="dname"><bdi>BIOS · {biosNewer.model}</bdi><span className="src">{biosNewer.site} · {t('official')}</span></div>
+              <div className="dmeta">{biosNewer.installed} {t('arrow')} <b>{biosNewer.latest.version}</b> · {biosNewer.latest.date} · {ltr(biosNewer.latest.size)} · {biosNewer.flash === 'windows' ? t('up.biosInstallWin', { maker: biosNewer.maker }) : t('up.biosInstallBios')}</div>
             </div>
             <div className="acts">
-              {busy === 'bios' ? <ProgressPill p={prog.bios} fallback="מוריד…" /> : (<>
-                <button className="btn-ghost" onClick={onGuide}><Info size={14} /> איך מתקינים</button>
-                <button className="icon-btn accent" title="הורד את הקובץ הרשמי" onClick={onBiosDownload} disabled={!!busy}><Download size={15} /></button>
+              {busy === 'bios' ? <ProgressPill p={prog.bios} fallback={t('prog.downloading')} /> : (<>
+                <button className="btn-ghost" onClick={onGuide}><Info size={14} /> {t('up.howInstall')}</button>
+                <button className="icon-btn accent" title={t('up.downloadOfficial')} onClick={onBiosDownload} disabled={!!busy}><Download size={15} /></button>
               </>)}
             </div>
           </div>
@@ -248,12 +243,12 @@ function UpdatesPage({ hw, wu, gpu, bios, scan, onScan, onInstall, onGpu, onBios
             <div key={u.id} className="drow">
               <span className="dicon"><Icon size={17} /></span>
               <div style={{ minWidth: 0 }}>
-                <div className="dname"><bdi>{dev?.name || u.model || u.title}</bdi><span className="src">Windows Update · חתום</span></div>
-                <div className="dmeta">{dev ? `${dev.version} ← ` : ''}<b>{titleVersion(u.title) || u.date}</b> · {u.maker} · {fmtGB(u.size)}</div>
+                <div className="dname"><bdi>{dev?.name || u.model || u.title}</bdi><span className="src">{t('up.signed')}</span></div>
+                <div className="dmeta">{dev ? `${dev.version} ${t('arrow')} ` : ''}<b>{titleVersion(u.title) || u.date}</b> · {u.maker} · {fmtGB(u.size)}</div>
               </div>
               <div className="acts">
-                {busy === u.id || busy === 'all' ? <ProgressPill p={busy === 'all' ? null : prog[busy]} fallback={busy === 'all' ? 'בעדכון…' : 'מתקין…'} />
-                  : <button className="icon-btn accent" title="עדכן רק את זה" onClick={() => onInstall([u])} disabled={!!busy}><Download size={15} /></button>}
+                {busy === u.id || busy === 'all' ? <ProgressPill p={busy === 'all' ? null : prog[busy]} fallback={t(busy === 'all' ? 'prog.updating' : 'prog.installing')} />
+                  : <button className="icon-btn accent" title={t('up.updateOne')} onClick={() => onInstall([u])} disabled={!!busy}><Download size={15} /></button>}
               </div>
             </div>
           );
@@ -262,12 +257,12 @@ function UpdatesPage({ hw, wu, gpu, bios, scan, onScan, onInstall, onGpu, onBios
           <div key={g.gpu} className="drow">
             <span className="dicon"><Monitor size={17} /></span>
             <div style={{ minWidth: 0 }}>
-              <div className="dname"><bdi>{g.gpu}</bdi><span className="src">{g.vendor.toLowerCase()}.com · רשמי</span></div>
-              <div className="dmeta">{g.package ? `מותקן ${g.vendor === 'AMD' ? 'AMD Software ' : ''}${g.package}` : `דרייבר מותקן ${g.installed}`} · גרסה אחרונה באתר <b>{g.title || g.latest}</b>{g.size ? <> · {ltr(g.size)}</> : null}</div>
+              <div className="dname"><bdi>{g.gpu}</bdi><span className="src">{g.vendor.toLowerCase()}.com · {t('official')}</span></div>
+              <div className="dmeta">{g.package ? t('up.installedPkg', { pkg: `${g.vendor === 'AMD' ? 'AMD Software ' : ''}${g.package}` }) : t('up.installedDrv', { v: g.installed })} · {t('up.latestOnSite')} <b>{g.title || g.latest}</b>{g.size ? <> · {ltr(g.size)}</> : null}</div>
             </div>
             <div className="acts">
-              {busy === g.gpu ? <ProgressPill p={prog[g.gpu]} fallback="מוריד…" />
-                : <button className="btn-ghost" onClick={() => onGpu(g)} disabled={!!busy} title="מוריד ומפעיל את תוכנת ההתקנה הרשמית"><Download size={14} /> הורד והפעל</button>}
+              {busy === g.gpu ? <ProgressPill p={prog[g.gpu]} fallback={t('prog.downloading')} />
+                : <button className="btn-ghost" onClick={() => onGpu(g)} disabled={!!busy} title={t('up.downloadRunTitle')}><Download size={14} /> {t('up.downloadRun')}</button>}
             </div>
           </div>
         ))}
@@ -275,13 +270,13 @@ function UpdatesPage({ hw, wu, gpu, bios, scan, onScan, onInstall, onGpu, onBios
           <div key={g.gpu} className="drow">
             <span className="dicon"><Monitor size={17} /></span>
             <div style={{ minWidth: 0 }}>
-              <div className="dname"><bdi>{g.gpu}</bdi><span className="src">intel.com · רשמי</span></div>
-              <div className="dmeta">דרייבר מותקן {g.installed} · עדכונים של Intel מגיעים גם דרך Windows Update. האתר של Intel מאפשר הורדה רק מהדפדפן.</div>
+              <div className="dname"><bdi>{g.gpu}</bdi><span className="src">intel.com · {t('official')}</span></div>
+              <div className="dmeta">{t('up.installedDrv', { v: g.installed })} · {t('up.intelNote')}</div>
             </div>
-            <div className="acts"><button className="btn-ghost" onClick={() => api.openLink(g.page)}><ExternalLink size={14} /> הדף הרשמי</button></div>
+            <div className="acts"><button className="btn-ghost" onClick={() => api.openLink(g.page)}><ExternalLink size={14} /> {t('up.officialPage')}</button></div>
           </div>
         ))}
-        {problems.length > 0 && <div className="panel-title" style={{ position: 'static' }}>דורשים תשומת לב</div>}
+        {problems.length > 0 && <div className="panel-title" style={{ position: 'static' }}>{t('up.attention')}</div>}
         {problems.map((p) => {
           const Icon = classIcon('', p.name);
           return (
@@ -289,21 +284,21 @@ function UpdatesPage({ hw, wu, gpu, bios, scan, onScan, onInstall, onGpu, onBios
               <span className="dicon warn"><Icon size={17} /></span>
               <div style={{ minWidth: 0 }}>
                 <div className="dname">{p.name}</div>
-                <div className="dmeta">{p.code === 22 ? 'מושבת במנהל ההתקנים' : p.code === 28 ? 'אין דרייבר מותקן' : `שגיאה ${p.code} במנהל ההתקנים`}</div>
+                <div className="dmeta">{p.code === 22 ? t('up.disabled') : p.code === 28 ? t('up.noDriver') : t('up.devError', { code: p.code })}</div>
               </div>
               <div className="acts">
-                {busy === p.id ? <ProgressPill p={prog[p.id]} fallback="מפעיל…" />
-                  : p.code === 22 && <button className="btn-ghost" onClick={() => onEnable(p)} disabled={!!busy}>הפעל</button>}
+                {busy === p.id ? <ProgressPill p={prog[p.id]} fallback={t('prog.enabling')} />
+                  : p.code === 22 && <button className="btn-ghost" onClick={() => onEnable(p)} disabled={!!busy}>{t('up.enable')}</button>}
               </div>
             </div>
           );
         })}
       </section>
       <footer className="action-bar">
-        <span className="muted save-where"><ShieldCheck size={14} style={{ verticalAlign: -3 }} /> נקודת שחזור נוצרת לפני כל התקנה</span>
-        {busy === 'all' ? <ProgressPill p={prog.all} fallback="מתקין…" /> : (
+        <span className="muted save-where"><ShieldCheck size={14} style={{ verticalAlign: -3 }} /> {t('up.restoreNote')}</span>
+        {busy === 'all' ? <ProgressPill p={prog.all} fallback={t('prog.installing')} /> : (
           <button className="btn-primary big" onClick={() => onInstall(wu || [])} disabled={!wu?.length || !!busy}>
-            <Download size={15} /> עדכן הכול ({wu?.length || 0})
+            <Download size={15} /> {t('up.updateAll', { n: wu?.length || 0 })}
           </button>
         )}
       </footer>
@@ -312,6 +307,7 @@ function UpdatesPage({ hw, wu, gpu, bios, scan, onScan, onInstall, onGpu, onBios
 }
 
 function HardwarePage({ hw, onExport }) {
+  const t = useT();
   const [q, setQ] = useState('');
   const list = useMemo(() => (hw?.devices || [])
     .filter((d) => !/^(Microsoft|\(Standard)/.test(d.provider || '') || q)
@@ -320,15 +316,15 @@ function HardwarePage({ hw, onExport }) {
   return (
     <>
       <header className="page-header">
-        <div><h1>החומרה שלי</h1><p className="subtitle">{hw ? `${hw.computer} · BIOS ${hw.bios.version} (${hw.bios.date}) · ${hw.ramGB} GB זיכרון` : 'סורק…'}</p></div>
+        <div><h1>{t('hw.title')}</h1><p className="subtitle">{hw ? t('hw.subtitle', { computer: hw.computer, v: hw.bios.version, d: hw.bios.date, ram: hw.ramGB }) : t('scanning')}</p></div>
         <div className="header-actions">
-          <button className="btn-ghost" disabled={!hw} onClick={() => onExport('csv')} title="כל הרכיבים בטבלה, נפתח ב-Excel"><FileSpreadsheet size={14} /> ייצוא ל-Excel</button>
-          <button className="btn-ghost" disabled={!hw} onClick={() => onExport('txt')} title="דוח קריא, מתאים להדבקה בפורום או לתמיכה"><FileText size={14} /> ייצוא כטקסט</button>
+          <button className="btn-ghost" disabled={!hw} onClick={() => onExport('csv')} title={t('hw.exportExcelTitle')}><FileSpreadsheet size={14} /> {t('hw.exportExcel')}</button>
+          <button className="btn-ghost" disabled={!hw} onClick={() => onExport('txt')} title={t('hw.exportTextTitle')}><FileText size={14} /> {t('hw.exportText')}</button>
         </div>
       </header>
-      <label className="search"><Search size={16} /><input placeholder="חיפוש רכיב, יצרן או סוג" value={q} onChange={(e) => setQ(e.target.value)} /></label>
+      <label className="search"><Search size={16} /><input placeholder={t('hw.search')} value={q} onChange={(e) => setQ(e.target.value)} /></label>
       <section className="panel">
-        <div className="panel-title">{q ? `${list.length} תוצאות` : `${list.length} רכיבים עם דרייבר של יצרן (דרייברים מובנים של Windows מוצגים בחיפוש)`}</div>
+        <div className="panel-title">{q ? t('hw.results', { n: list.length }) : t('hw.count', { n: list.length })}</div>
         {list.map((d) => {
           const Icon = classIcon(d.cls, d.name);
           return (
@@ -338,7 +334,7 @@ function HardwarePage({ hw, onExport }) {
                 <div className="dname">{d.name}</div>
                 <div className="dmeta"><bdi dir="ltr">{d.version}</bdi> · {shownDate(d.date)} · {d.provider || d.maker}</div>
               </div>
-              <span className="src">{d.cls || 'אחר'}</span>
+              <span className="src">{d.cls || t('hw.other')}</span>
             </div>
           );
         })}
@@ -349,40 +345,52 @@ function HardwarePage({ hw, onExport }) {
 
 // ---------------- optimization ----------------
 
+// Recommendations arrive as data; their wording lives in the dictionary.
+const recTitle = (r, t) => t(`rec.${r.key}.title`);
+const recValue = (r, t) => ({
+  power: r.value,
+  gamemode: t(r.on ? 'on' : 'off'),
+  hags: t(r.on ? 'on' : 'off'),
+  disk: t('rec.disk.value', { free: r.freeGB, size: r.sizeGB }),
+  bios: `${r.version} (${r.date})`,
+}[r.key] ?? '');
+const recNote = (r, t) => (r.key === 'bios' ? t(r.intel1314 ? 'rec.bios.note1314' : 'rec.bios.note') : t(`rec.${r.key}.note`));
+
 function OverviewPage({ junk, startup, perf, recs, go }) {
+  const t = useT();
   const junkTotal = (junk || []).reduce((s, c) => s + c.bytes, 0);
   const startOn = (startup || []).filter((s) => s.enabled).length;
   const toImprove = (recs || []).filter((r) => r.ok === false).length;
   return (
     <>
-      <header className="page-header"><div><h1>מיטוב המחשב</h1><p className="subtitle">קודם רואים מה נמצא. שום דבר לא משתנה בלי אישור שלך, ולכל שינוי יש ביטול.</p></div></header>
+      <header className="page-header"><div><h1>{t('ov.title')}</h1><p className="subtitle">{t('ov.subtitle')}</p></div></header>
       <div className="grid2">
         <div className="ocard">
-          <div className="ohead"><span><Trash2 size={16} /> ניקוי קבצים</span><b style={{ color: 'var(--accent)' }}>{junk ? fmtGB(junkTotal) : '…'}</b></div>
-          {(junk || []).filter((c) => c.bytes > 1e6).slice(0, 4).map((c) => <div key={c.key} className="orow"><span>{c.label}</span><span>{fmtGB(c.bytes)}</span></div>)}
-          <div className="ofoot"><span /><button className="btn-primary" onClick={() => go('clean')}>לניקוי</button></div>
+          <div className="ohead"><span><Trash2 size={16} /> {t('ov.clean')}</span><b style={{ color: 'var(--accent)' }}>{junk ? fmtGB(junkTotal) : '…'}</b></div>
+          {(junk || []).filter((c) => c.bytes > 1e6).slice(0, 4).map((c) => <div key={c.key} className="orow"><span>{t(`junk.${c.key}`)}</span><span>{fmtGB(c.bytes)}</span></div>)}
+          <div className="ofoot"><span /><button className="btn-primary" onClick={() => go('clean')}>{t('ov.toClean')}</button></div>
         </div>
         <div className="ocard">
-          <div className="ohead"><span><Rocket size={16} /> עולות עם Windows</span><span className="muted">{startup ? `${startOn} פעילות מתוך ${startup.length}` : '…'}</span></div>
-          {(startup || []).filter((s) => s.enabled).slice(0, 4).map((s) => <div key={s.source + s.key} className="orow"><span>{s.name}</span><span className="ok-text">פעילה</span></div>)}
-          <div className="ofoot"><span /><button className="btn-ghost" onClick={() => go('startup')}>לכל הרשימה</button></div>
+          <div className="ohead"><span><Rocket size={16} /> {t('ov.startup')}</span><span className="muted">{startup ? t('ov.activeOf', { n: startOn, total: startup.length }) : '…'}</span></div>
+          {(startup || []).filter((s) => s.enabled).slice(0, 4).map((s) => <div key={s.source + s.key} className="orow"><span>{s.name}</span><span className="ok-text">{t('ov.active')}</span></div>)}
+          <div className="ofoot"><span /><button className="btn-ghost" onClick={() => go('startup')}>{t('ov.allList')}</button></div>
         </div>
         <div className="ocard">
-          <div className="ohead"><span><Thermometer size={16} /> מעבד וזיכרון</span></div>
+          <div className="ohead"><span><Thermometer size={16} /> {t('ov.perf')}</span></div>
           {perf ? (<>
-            <div className="orow"><span>עומס על המעבד</span><span>{perf.cpuLoad}%</span></div>
-            <div className="orow"><span>זיכרון בשימוש</span><span>{ltr(`${(perf.ramTotalGB - perf.ramFreeGB).toFixed(1)} / ${perf.ramTotalGB} GB`)}</span></div>
-            {[].concat(perf.gpuTemps || []).slice(0, 1).map((g) => <div key={g.name} className="orow"><span>טמפ׳ כרטיס מסך</span><span className={tempClass(g.tempC)}>{ltr(`${g.tempC}°C`)}</span></div>)}
-            <div className="orow"><span>הכי צורכות זיכרון</span><span className="note">{[].concat(perf.topRam).slice(0, 2).map((p) => p.name).join(', ')}</span></div>
+            <div className="orow"><span>{t('ov.cpuLoad')}</span><span>{perf.cpuLoad}%</span></div>
+            <div className="orow"><span>{t('ov.ramUsed')}</span><span>{ltr(`${(perf.ramTotalGB - perf.ramFreeGB).toFixed(1)} / ${perf.ramTotalGB} GB`)}</span></div>
+            {[].concat(perf.gpuTemps || []).slice(0, 1).map((g) => <div key={g.name} className="orow"><span>{t('ov.gpuTemp')}</span><span className={tempClass(g.tempC)}>{ltr(`${g.tempC}°C`)}</span></div>)}
+            <div className="orow"><span>{t('ov.topRam')}</span><span className="note">{[].concat(perf.topRam).slice(0, 2).map((p) => p.name).join(', ')}</span></div>
           </>) : <div className="center-msg"><Loader2 size={16} className="spin" /></div>}
-          <div className="ofoot"><span /><button className="btn-ghost" onClick={() => go('perf')}>פרטים</button></div>
+          <div className="ofoot"><span /><button className="btn-ghost" onClick={() => go('perf')}>{t('ov.details')}</button></div>
         </div>
         <div className="ocard">
-          <div className="ohead"><span><Settings2 size={16} /> הגדרות מומלצות</span><span className="muted">{recs ? (toImprove ? `${toImprove} לשיפור` : 'הכול תקין') : '…'}</span></div>
+          <div className="ohead"><span><Settings2 size={16} /> {t('ov.recs')}</span><span className="muted">{recs ? (toImprove ? t('ov.toImprove', { n: toImprove }) : t('ov.allOk')) : '…'}</span></div>
           {(recs || []).slice(0, 4).map((r) => (
-            <div key={r.key} className="orow"><span>{r.title}</span>{r.ok === true ? <span className="ok-text">תקין</span> : r.ok === false ? <span className="warn-text">לשיפור</span> : <span className="note">לבדיקה</span>}</div>
+            <div key={r.key} className="orow"><span>{recTitle(r, t)}</span>{r.ok === true ? <span className="ok-text">{t('ok')}</span> : r.ok === false ? <span className="warn-text">{t('improve')}</span> : <span className="note">{t('toCheck')}</span>}</div>
           ))}
-          <div className="ofoot"><span /><button className="btn-ghost" onClick={() => go('recs')}>לכל ההמלצות</button></div>
+          <div className="ofoot"><span /><button className="btn-ghost" onClick={() => go('recs')}>{t('ov.allRecs')}</button></div>
         </div>
       </div>
     </>
@@ -390,6 +398,7 @@ function OverviewPage({ junk, startup, perf, recs, go }) {
 }
 
 function CleanPage({ junk, onRescan, onClean, busy }) {
+  const t = useT();
   const [sel, setSel] = useState({});
   useEffect(() => { if (junk) setSel(Object.fromEntries(junk.map((c) => [c.key, c.bytes > 0]))); }, [junk]);
   const chosen = (junk || []).filter((c) => sel[c.key] && c.bytes > 0);
@@ -397,13 +406,14 @@ function CleanPage({ junk, onRescan, onClean, busy }) {
   return (
     <>
       <header className="page-header">
-        <div><h1>ניקוי קבצים</h1><p className="subtitle">קבצים זמניים ומטמון שאפשר למחוק בבטחה. קבצים שבשימוש כרגע מדולגים.</p></div>
-        <button className="btn-ghost" onClick={onRescan} disabled={!!busy}><RefreshCw size={14} /> סרוק שוב</button>
+        <div><h1>{t('cl.title')}</h1><p className="subtitle">{t('cl.subtitle')}</p></div>
+        <button className="btn-ghost" onClick={onRescan} disabled={!!busy}><RefreshCw size={14} /> {t('cl.rescan')}</button>
       </header>
       <section className="panel">
-        <div className="panel-title">{junk ? `נמצאו ${fmtGB((junk || []).reduce((s, c) => s + c.bytes, 0))}` : 'סורק…'}</div>
+        <div className="panel-title">{junk ? t('cl.found', { size: fmtGB((junk || []).reduce((s, c) => s + c.bytes, 0)) }) : t('scanning')}</div>
         {(junk || []).map((c) => {
           const dirs = [].concat(c.dirs || []);
+          const label = t(`junk.${c.key}`);
           // Several folders (one per browser, several crash-report folders): one small link each.
           const dirName = (d) => (/Chrome/i.test(d) ? 'Chrome' : /Edge/i.test(d) ? 'Edge' : /Brave/i.test(d) ? 'Brave' : d.split('\\').pop());
           const open = (e, d) => { e.stopPropagation(); api.openFolder(d); };
@@ -414,11 +424,11 @@ function CleanPage({ junk, onRescan, onClean, busy }) {
               <div style={{ minWidth: 0 }}>
                 <div className="dname">
                   {dirs.length === 1
-                    ? <button className="folder-link" title={`פתח את התיקייה: ${dirs[0]}`} onClick={(e) => open(e, dirs[0])}>{c.label} <FolderOpen size={13} /></button>
-                    : c.label}
+                    ? <button className="folder-link" title={t('cl.openFolder', { dir: dirs[0] })} onClick={(e) => open(e, dirs[0])}>{label} <FolderOpen size={13} /></button>
+                    : label}
                   {dirs.length > 1 && <span className="dir-chips">{dirs.map((d) => <button key={d} className="dir-chip" title={d} onClick={(e) => open(e, d)}><FolderOpen size={11} /> {dirName(d)}</button>)}</span>}
                 </div>
-                <div className="dmeta">{c.files.toLocaleString('he-IL')} קבצים{c.minAgeHours ? ' · רק מלפני יותר מיממה' : ''}{c.admin ? ' · דורש אישור מנהל' : ''}</div>
+                <div className="dmeta">{t('cl.files', { n: c.files.toLocaleString(t.locale) })}{c.minAgeHours ? t('cl.olderDay') : ''}{c.admin ? t('cl.needsAdmin') : ''}</div>
               </div>
               <div className="acts"><b>{fmtGB(c.bytes)}</b><input type="checkbox" checked={!!sel[c.key]} disabled={!c.bytes} onClick={(e) => e.stopPropagation()} onChange={(e) => setSel((s) => ({ ...s, [c.key]: e.target.checked }))} /></div>
             </div>
@@ -426,9 +436,9 @@ function CleanPage({ junk, onRescan, onClean, busy }) {
         })}
       </section>
       <footer className="action-bar">
-        <span className="muted save-where">מחיקה סופית, בלי סל מחזור. נמחק רק מה שמסומן.</span>
-        <button className="btn-primary big" disabled={!total || !!busy} onClick={() => window.confirm(`למחוק ${fmtGB(total)} של קבצים זמניים? אי אפשר לשחזר אותם.`) && onClean(chosen)}>
-          {busy ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />} נקה {total ? fmtGB(total) : ''}
+        <span className="muted save-where">{t('cl.permanent')}</span>
+        <button className="btn-primary big" disabled={!total || !!busy} onClick={() => window.confirm(t('cl.confirm', { size: fmtGB(total) })) && onClean(chosen)}>
+          {busy ? <Loader2 size={15} className="spin" /> : <Trash2 size={15} />} {t('cl.clean', { size: total ? fmtGB(total) : '' })}
         </button>
       </footer>
     </>
@@ -436,22 +446,23 @@ function CleanPage({ junk, onRescan, onClean, busy }) {
 }
 
 function StartupPage({ startup, onToggle, busy, prog }) {
+  const t = useT();
   return (
     <>
-      <header className="page-header"><div><h1>הפעלה עם Windows</h1><p className="subtitle">כל תוכנה שמכבים כאן עדיין מותקנת ונפתחת כרגיל. היא רק לא עולה לבד. כל מתג הפיך.</p></div></header>
+      <header className="page-header"><div><h1>{t('st.title')}</h1><p className="subtitle">{t('st.subtitle')}</p></div></header>
       <section className="panel">
-        <div className="panel-title">{startup ? `${startup.filter((s) => s.enabled).length} פעילות מתוך ${startup.length}` : 'טוען…'}</div>
+        <div className="panel-title">{startup ? t('ov.activeOf', { n: startup.filter((s) => s.enabled).length, total: startup.length }) : t('loading')}</div>
         {(startup || []).map((s) => (
           <div key={s.source + s.key} className="drow">
             <span className="dicon"><Rocket size={16} /></span>
             <div style={{ minWidth: 0 }}>
               <div className="dname">{s.name}</div>
-              <div className="dmeta" dir="ltr" style={{ textAlign: 'right' }}>{s.cmd}</div>
+              <div className="dmeta path-text" dir="ltr">{s.cmd}</div>
             </div>
             <div className="acts">
-              {s.admin && <span className="src">מנהל</span>}
-              {busy === s.source + s.key ? <ProgressPill p={prog[busy]} fallback="משנה…" />
-                : <button className={`toggle ${s.enabled ? 'on' : ''}`} aria-label={s.enabled ? 'כבה' : 'הפעל'} disabled={!!busy} onClick={() => onToggle(s, !s.enabled)} />}
+              {s.admin && <span className="src">{t('st.admin')}</span>}
+              {busy === s.source + s.key ? <ProgressPill p={prog[busy]} fallback={t('prog.changing')} />
+                : <button className={`toggle ${s.enabled ? 'on' : ''}`} aria-label={t(s.enabled ? 'st.turnOff' : 'st.turnOn')} disabled={!!busy} onClick={() => onToggle(s, !s.enabled)} />}
             </div>
           </div>
         ))}
@@ -460,25 +471,17 @@ function StartupPage({ startup, onToggle, busy, prog }) {
   );
 }
 
-// Why there is no CPU temperature yet, in the user's terms.
-const cpuNoteText = (n) => ({
-  'no service': 'דורש את שירות הרקע',
-  'pawnio not installed': 'דורש את PawnIO (התקן מחדש את השירות)',
-  'cpu not supported yet': 'עדיין רק למעבדי Intel',
-}[n] || 'החיישן לא זמין כרגע');
-
-const rpm = (n) => ltr(`${Number(n).toLocaleString('he-IL')} RPM`);
-const liquidNoteText = (n) => ({
-  'no service': 'דורש את שירות הרקע',
-  'corsair needs icue': 'Corsair: פתח את iCUE כדי לראות',
-  'no reading from icue': 'לא התקבלה קריאה מ-iCUE',
-  'no supported cooler': 'המקרר לא מדווח טמפ׳ נוזל',
-}[n] || 'לא זמין');
+// Why a sensor has no reading yet, in the user's terms.
+const cpuNoteKey = (n) => ({ 'no service': 'cpuNote.noService', 'pawnio not installed': 'cpuNote.pawnio', 'cpu not supported yet': 'cpuNote.unsupported' }[n] || 'cpuNote.unavailable');
+const liquidNoteKey = (n) => ({
+  'no service': 'liquidNote.noService', 'corsair needs icue': 'liquidNote.needsIcue', 'no reading from icue': 'liquidNote.noReading', 'no supported cooler': 'liquidNote.noCooler',
+}[n] || 'liquidNote.unavailable');
+const rpm = (n, t) => ltr(`${Number(n).toLocaleString(t.locale)} RPM`);
 // Coolant runs much cooler than the CPU: about 30-40°C at rest is normal, past ~45°C is worth a look.
 const liquidClass = (c) => (c == null ? '' : c >= 48 ? 'temp-hot' : c >= 42 ? 'temp-warm' : 'temp-ok');
 
 // "Why is my PC hot?": plain-language findings from the readings, most important first.
-function coolingFindings(p) {
+function coolingFindings(p, t) {
   const out = [];
   const idle = p.cpuLoad < 20;
   const radiator = [].concat(p.fans || []).filter((f) => f.source === p.liquidSource).map((f) => f.rpm);
@@ -486,67 +489,64 @@ function coolingFindings(p) {
   if (p.liquidTempC != null && p.liquidTempC >= 45) {
     out.push({
       level: 'warn',
-      text: `נוזל הקירור חם (${p.liquidTempC}°C)${idle ? ' כשהמחשב כמעט לא עובד' : ''}. במנוחה הוא בדרך כלל 30–40°C.`
-        + (p.pumpRpm ? ` המשאבה מסתובבת (${p.pumpRpm.toLocaleString('he-IL')} RPM), אז היא לא תקועה.` : '')
-        + (fast ? ' המאווררים ברדיאטור כבר מהירים, כלומר החום לא יוצא ממנו טוב.' : ''),
-      tips: 'כדאי לבדוק: אבק ברדיאטור ובמסננים, שהרדיאטור מקבל אוויר קר מבחוץ ולא אוויר חם מכרטיס המסך, וחום החדר. אם זה נשאר כך, קירור נוזלי סגור מאבד נוזל עם השנים, וכדאי לפנות לאחריות של היצרן.',
+      text: t('fd.liquidHot', { t: p.liquidTempC, idle: idle ? t('fd.idle') : '' })
+        + (p.pumpRpm ? t('fd.pumpOk', { rpm: p.pumpRpm.toLocaleString(t.locale) }) : '')
+        + (fast ? t('fd.fansFast') : ''),
+      tips: t('fd.liquidTips'),
     });
   }
   // At rest a CPU usually sits around 30–50°C; warmer than that at idle is worth explaining.
   if (p.cpuTempC != null && idle && p.cpuTempC >= 55) {
     out.push({
       level: 'warn',
-      text: `המעבד ${p.cpuTempC >= 70 ? 'חם' : 'חם מהרגיל'} (${p.cpuTempC}°C) בזמן מנוחה. בדרך כלל במנוחה הוא 30–50°C.`,
-      tips: p.liquidTempC != null && p.liquidTempC < 42
-        ? 'נוזל הקירור עצמו קר, אז הבעיה כנראה במגע בין המעבד לקירור: משחה תרמית יבשה או הידוק לא אחיד.'
-        : p.liquidTempC == null
-          ? 'כדי לדעת אם הקירור הוא הסיבה, צריך את טמפ׳ נוזל הקירור (אם יש לך קירור נוזלי). בינתיים כדאי לבדוק אבק ברדיאטור ובמאווררים, ואת התוכנות שמעמיסות ברקע (ברשימה למטה).'
-          : 'בדוק את הקירור לפי הסעיף למעלה, ואת התוכנות שמעמיסות ברקע (ברשימה למטה).',
+      text: t(p.cpuTempC >= 70 ? 'fd.cpuHot' : 'fd.cpuWarm', { t: p.cpuTempC }),
+      tips: t(p.liquidTempC != null && p.liquidTempC < 42 ? 'fd.tipContact' : p.liquidTempC == null ? 'fd.tipNoLiquid' : 'fd.tipCheckCooling'),
     });
   }
   // "Fine" only when what we can see supports it.
   const cpuFine = p.cpuTempC != null && (!idle || p.cpuTempC < 55);
   const liquidFine = p.liquidTempC == null || p.liquidTempC < 42;
-  if (!out.length && cpuFine && liquidFine) out.push({ level: 'ok', text: 'הקירור נראה תקין לפי הקריאות עכשיו.' });
+  if (!out.length && cpuFine && liquidFine) out.push({ level: 'ok', text: t('fd.ok') });
   return out;
 }
 
 function PerfPage({ perf, onRefresh, onInstallService, busy }) {
-  const findings = perf ? coolingFindings(perf) : [];
+  const t = useT();
+  const findings = perf ? coolingFindings(perf, t) : [];
   const gpu = [].concat(perf?.gpuTemps || [])[0];
   return (
     <>
       <header className="page-header">
-        <div><h1>מעבד וזיכרון</h1><p className="subtitle">מה מעמיס על המחשב עכשיו, כמה חם בו, ולמה.</p></div>
-        <button className="btn-ghost" onClick={onRefresh}><RefreshCw size={14} /> רענן</button>
+        <div><h1>{t('pf.title')}</h1><p className="subtitle">{t('pf.subtitle')}</p></div>
+        <button className="btn-ghost" onClick={onRefresh}><RefreshCw size={14} /> {t('pf.refresh')}</button>
       </header>
       {!perf ? <div className="center-msg"><Loader2 size={16} className="spin" /></div> : (<>
         <div className="stats three">
-          <div className="stat"><span>עומס על המעבד</span><b>{perf.cpuLoad}%</b></div>
-          <div className="stat"><span>זיכרון בשימוש</span><b>{ltr(`${(perf.ramTotalGB - perf.ramFreeGB).toFixed(1)} GB`)}</b></div>
-          <div className="stat"><span>זיכרון פנוי</span><b>{ltr(`${perf.ramFreeGB} GB`)}</b></div>
+          <div className="stat"><span>{t('pf.cpuLoad')}</span><b>{perf.cpuLoad}%</b></div>
+          <div className="stat"><span>{t('pf.ramUsed')}</span><b>{ltr(`${(perf.ramTotalGB - perf.ramFreeGB).toFixed(1)} GB`)}</b></div>
+          <div className="stat"><span>{t('pf.ramFree')}</span><b>{ltr(`${perf.ramFreeGB} GB`)}</b></div>
         </div>
         <div className="stats three">
-          <div className="stat" title="נקרא דרך שירות הרקע (LibreHardwareMonitor ו-PawnIO)">
-            <span><Cpu size={13} /> טמפ׳ מעבד</span>
+          <div className="stat" title={t('pf.cpuTempTitle')}>
+            <span><Cpu size={13} /> {t('pf.cpuTemp')}</span>
             {perf.cpuTempC == null ? (<>
               <b className="na">—</b>
-              <small>{cpuNoteText(perf.cpuNote)}{perf.cpuNote === 'no service' && <> · <button className="link-btn" onClick={onInstallService} disabled={!!busy}>התקן</button></>}</small>
+              <small>{t(cpuNoteKey(perf.cpuNote))}{perf.cpuNote === 'no service' && <> · <button className="link-btn" onClick={onInstallService} disabled={!!busy}>{t('pf.install')}</button></>}</small>
             </>) : <b className={tempClass(perf.cpuTempC)}>{ltr(`${perf.cpuTempC}°C`)}</b>}
           </div>
-          <div className="stat" title="מהבקר של הקירור הנוזלי. ב-Corsair: נקרא מהתשובות ש-iCUE מקבל, בלי לשלוח לבקר כלום">
-            <span><Droplets size={13} /> טמפ׳ נוזל קירור</span>
-            {perf.liquidTempC == null ? <><b className="na">—</b><small>{liquidNoteText(perf.liquidNote)}</small></> : (<>
+          <div className="stat" title={t('pf.liquidTitle')}>
+            <span><Droplets size={13} /> {t('pf.liquid')}</span>
+            {perf.liquidTempC == null ? <><b className="na">—</b><small>{t(liquidNoteKey(perf.liquidNote))}</small></> : (<>
               <b className={liquidClass(perf.liquidTempC)}>{ltr(`${perf.liquidTempC}°C`)}</b>
-              <small>{perf.pumpRpm ? <>משאבה {rpm(perf.pumpRpm)}</> : perf.liquidSource}</small>
+              <small>{perf.pumpRpm ? t('pf.pump', { rpm: rpm(perf.pumpRpm, t) }) : perf.liquidSource}</small>
             </>)}
           </div>
           <div className="stat" title={gpu?.name || ''}>
-            <span><Monitor size={13} /> טמפ׳ כרטיס מסך</span>
+            <span><Monitor size={13} /> {t('pf.gpuTemp')}</span>
             {gpu ? (<>
               <b className={tempClass(gpu.tempC)}>{ltr(`${gpu.tempC}°C`)}</b>
-              <small>{[gpu.hotspotC ? `נקודה חמה ${ltr(`${gpu.hotspotC}°C`)}` : null, gpu.fanRpm ? `מאוורר ${rpm(gpu.fanRpm)}` : null].filter(Boolean).join(' · ') || gpu.name}</small>
-            </>) : <><b className="na">—</b><small>הכרטיס לא מדווח ל-Windows</small></>}
+              <small>{[gpu.hotspotC ? t('pf.hotspot', { t: ltr(`${gpu.hotspotC}°C`) }) : null, gpu.fanRpm ? t('pf.fan', { rpm: rpm(gpu.fanRpm, t) }) : null].filter(Boolean).join(' · ') || gpu.name}</small>
+            </>) : <><b className="na">—</b><small>{t('pf.gpuNone')}</small></>}
           </div>
         </div>
         {findings.map((f) => (
@@ -556,44 +556,46 @@ function PerfPage({ perf, onRefresh, onInstallService, busy }) {
           </div>
         ))}
         <div className="grid2">
-          <div className="ocard"><div className="ohead"><span><Cpu size={16} /> הכי מעמיסות על המעבד</span></div>
+          <div className="ocard"><div className="ohead"><span><Cpu size={16} /> {t('pf.topCpu')}</span></div>
             {[].concat(perf.topCpu).map((p) => <div key={p.name} className="orow"><span>{p.name}{p.count > 1 ? ` (${p.count})` : ''}</span><span>{p.cpu}%</span></div>)}</div>
-          <div className="ocard"><div className="ohead"><span><HardDrive size={16} /> הכי צורכות זיכרון</span></div>
+          <div className="ocard"><div className="ohead"><span><HardDrive size={16} /> {t('pf.topRam')}</span></div>
             {[].concat(perf.topRam).map((p) => <div key={p.name} className="orow"><span>{p.name}{p.count > 1 ? ` (${p.count})` : ''}</span><span>{ltr(`${(p.ramMB / 1024).toFixed(1)} GB`)}</span></div>)}</div>
         </div>
       </>)}
     </>
   );
 }
+
 function RecsPage({ recs, bios, onApply, onBiosDownload, onGuide, busy, prog }) {
+  const t = useT();
   return (
     <>
-      <header className="page-header"><div><h1>הגדרות מומלצות</h1><p className="subtitle">רק שינויים שאפשר להסביר ולבטל. בלי "טריקים" ברג׳יסטרי.</p></div></header>
+      <header className="page-header"><div><h1>{t('rc.title')}</h1><p className="subtitle">{t('rc.subtitle')}</p></div></header>
       <section className="panel">
         {(recs || []).map((r) => {
-          // BIOS: checked against the board maker's site, so its status comes from the BIOS check.
+          // BIOS: checked against the maker's site, so its status comes from the BIOS check.
           const isBios = r.key === 'bios';
           const ok = isBios ? (bios?.supported ? !bios.newer : null) : r.ok;
           const note = isBios && bios?.supported
-            ? (bios.newer ? `גרסה ${bios.latest.version} זמינה באתר ${bios.maker} (${bios.latest.date}). ${r.note}` : `זו הגרסה האחרונה באתר ${bios.maker}.`)
-            : r.note;
+            ? (bios.newer ? `${t('rc.biosNewer', { v: bios.latest.version, maker: bios.maker, date: bios.latest.date })} ${recNote(r, t)}` : t('rc.biosLatest', { maker: bios.maker }))
+            : recNote(r, t);
           return (
             <div key={r.key} className="drow">
               <span className={`dicon ${ok === false ? 'warn' : ''}`}>{ok === false ? <AlertTriangle size={16} /> : <Check size={16} />}</span>
               <div style={{ minWidth: 0 }}>
-                <div className="dname">{r.title} · <span style={{ fontWeight: 400 }}>{String(r.value ?? '').replace(/\(?\d[\d.,:/-]*\)?(?:\s?(?:GB|MB))?/g, (m) => ltr(m))}</span></div>
+                <div className="dname">{recTitle(r, t)} · <span style={{ fontWeight: 400 }}>{String(recValue(r, t)).replace(/\(?\d[\d.,:/-]*\)?(?:\s?(?:GB|MB))?/g, (m) => ltr(m))}</span></div>
                 <div className="dmeta" style={{ whiteSpace: 'normal' }}>{note}</div>
               </div>
               <div className="acts">
-                {ok === true && <span className="ok-text">תקין</span>}
-                {isBios && bios?.supported && bios.newer && (busy === 'bios' ? <ProgressPill p={prog.bios} fallback="מוריד…" /> : (<>
-                  <button className="btn-ghost" onClick={onGuide}><Info size={14} /> איך מתקינים</button>
-                  <button className="btn-primary" disabled={!!busy} onClick={onBiosDownload}><Download size={14} /> הורד</button>
+                {ok === true && <span className="ok-text">{t('ok')}</span>}
+                {isBios && bios?.supported && bios.newer && (busy === 'bios' ? <ProgressPill p={prog.bios} fallback={t('prog.downloading')} /> : (<>
+                  <button className="btn-ghost" onClick={onGuide}><Info size={14} /> {t('up.howInstall')}</button>
+                  <button className="btn-primary" disabled={!!busy} onClick={onBiosDownload}><Download size={14} /> {t('rc.download')}</button>
                 </>))}
                 {isBios && !bios && <Loader2 size={15} className="spin" />}
-                {isBios && bios && !bios.supported && <button className="btn-ghost" onClick={() => api.openLink(bios.page || r.link)}><ExternalLink size={14} /> חפש באתר היצרן</button>}
-                {r.action && !isBios && (busy === r.key ? <ProgressPill p={prog[r.key]} fallback="מחיל…" />
-                  : <button className="btn-primary" disabled={!!busy} onClick={() => onApply(r)}>החל</button>)}
+                {isBios && bios && !bios.supported && <button className="btn-ghost" onClick={() => api.openLink(bios.page || r.link)}><ExternalLink size={14} /> {t('rc.searchMaker')}</button>}
+                {r.action && !isBios && (busy === r.key ? <ProgressPill p={prog[r.key]} fallback={t('prog.applying')} />
+                  : <button className="btn-primary" disabled={!!busy} onClick={() => onApply(r)}>{t('rc.apply')}</button>)}
               </div>
             </div>
           );
@@ -604,38 +606,41 @@ function RecsPage({ recs, bios, onApply, onBiosDownload, onGuide, busy, prog }) 
 }
 
 function HistoryPage({ busy, onRestorePoint }) {
+  const t = useT();
   const [items, setItems] = useState([]);
   // Skip anything that isn't a Tune entry, so one malformed line can't take the whole page down.
   useEffect(() => { api.getHistory().then((list) => setItems([].concat(list || []).filter((h) => h && h.action && h.detail))); }, [busy]);
   const describe = (h) => {
     const d = h.detail;
-    return ({
-      drivers: `עודכנו דרייברים: ${(d.items || []).join(', ')}${d.reboot ? ' (נדרשת הפעלה מחדש)' : ''}`,
-      gpu: `הורדה תוכנת התקנה רשמית: ${d.file}`,
-      bios: `הורד BIOS ${d.version} (קובץ מאומת): ${d.file}`,
-      service: d.installed ? `הותקן שירות הרקע${d.pawnio === 'installed' ? ' ו-PawnIO' : ''}` : 'הוסר שירות הרקע',
-      enable: `הופעל רכיב: ${d.name}`,
-      clean: `נוקו ${fmtGB(d.freed || 0)}: ${(d.cats || []).join(', ')}`,
-      startup: `${d.enabled ? 'הופעלה' : 'כובתה'} בהפעלה עם Windows: ${d.name}`,
-      setting: `שונתה הגדרה: ${d.title}`,
-      restore: 'נוצרה נקודת שחזור',
-    })[h.action] || h.action;
+    switch (h.action) {
+      case 'drivers': return t('h.drivers', { items: (d.items || []).join(', ') }) + (d.reboot ? t('h.reboot') : '');
+      case 'gpu': return t('h.gpu', { file: d.file });
+      case 'bios': return t('h.bios', { v: d.version, file: d.file });
+      case 'service': return t(!d.installed ? 'h.serviceOut' : d.pawnio === 'installed' ? 'h.serviceInPawn' : 'h.serviceIn');
+      case 'enable': return t('h.enable', { name: d.name });
+      // Newer entries store category keys; older ones stored the Hebrew label itself.
+      case 'clean': return t('h.clean', { size: fmtGB(d.freed || 0), cats: (d.cats || []).map((c) => tOr(t, `junk.${c}`, c)).join(', ') });
+      case 'startup': return t(d.enabled ? 'h.startupOn' : 'h.startupOff', { name: d.name });
+      case 'setting': return t('h.setting', { title: d.key ? t(`rec.${d.key}.title`) : d.title });
+      case 'restore': return t('h.restore');
+      default: return h.action;
+    }
   };
   return (
     <>
       <header className="page-header">
-        <div><h1>היסטוריה ושחזור</h1><p className="subtitle">כל מה ש-Tune שינה. משהו לא עובד? חוזרים לנקודת שחזור.</p></div>
+        <div><h1>{t('hs.title')}</h1><p className="subtitle">{t('hs.subtitle')}</p></div>
         <div className="header-actions">
-          <button className="btn-ghost" onClick={onRestorePoint} disabled={!!busy}><ShieldCheck size={14} /> צור נקודת שחזור</button>
-          <button className="btn-ghost" onClick={() => api.openSystemRestore()}><Undo2 size={14} /> חזור לנקודת שחזור</button>
+          <button className="btn-ghost" onClick={onRestorePoint} disabled={!!busy}><ShieldCheck size={14} /> {t('hs.createRp')}</button>
+          <button className="btn-ghost" onClick={() => api.openSystemRestore()}><Undo2 size={14} /> {t('hs.restoreRp')}</button>
         </div>
       </header>
       <section className="panel">
-        {items.length === 0 && <div className="center-msg">עוד לא בוצעו שינויים.</div>}
+        {items.length === 0 && <div className="center-msg">{t('hs.empty')}</div>}
         {items.map((h, i) => (
           <div key={i} className="drow">
             <span className="dicon"><RotateCcw size={16} /></span>
-            <div style={{ minWidth: 0 }}><div className="dname" style={{ whiteSpace: 'normal' }}>{describe(h)}</div><div className="dmeta">{fmtDate(h.at)}</div></div>
+            <div style={{ minWidth: 0 }}><div className="dname" style={{ whiteSpace: 'normal' }}>{describe(h)}</div><div className="dmeta">{fmtDate(h.at, t)}</div></div>
             <span />
           </div>
         ))}
@@ -644,44 +649,51 @@ function HistoryPage({ busy, onRestorePoint }) {
   );
 }
 
-function SettingsPage({ version, status, onCheck, settings, onPickDir, service, onInstallService, onRemoveService, busy, prog }) {
-  const svcText = !service ? 'בודק…'
-    : service.running ? `פועל${service.current ? '' : ' · יש גרסה חדשה לשירות'} · PawnIO ${service.pawnio ? `מותקן (${service.pawnio})` : 'לא מותקן'}`
-      : service.installed ? 'מותקן אבל לא פועל' : 'לא מותקן';
-  const msg = {
-    checking: 'בודק אם יש גרסה חדשה…', none: 'Tune מעודכן לגרסה האחרונה', available: `גרסה ${status?.version} זמינה`,
-    downloading: `מוריד… ${status?.percent || 0}%`, ready: 'מוכן להתקנה', error: 'הבדיקה נכשלה', dev: 'בדיקת עדכונים פועלת רק בגרסה המותקנת',
-  }[status?.state] || 'Tune בודק עדכונים בכל הפעלה וכל 4 שעות.';
+function SettingsPage({ version, status, onCheck, settings, onPickDir, onLang, service, onInstallService, onRemoveService, busy, prog }) {
+  const t = useT();
+  const svcText = !service ? t('se.svc.checking')
+    : service.running ? `${t('se.svc.running')}${service.current ? '' : t('se.svc.outdated')} · ${service.pawnio ? t('se.svc.pawnOk', { v: service.pawnio }) : t('se.svc.pawnMissing')}`
+      : t(service.installed ? 'se.svc.stopped' : 'se.svc.none');
+  const known = ['checking', 'none', 'available', 'downloading', 'ready', 'error', 'dev'];
+  const msg = known.includes(status?.state) ? t(`se.upd.${status.state}`, { v: status.version, p: status.percent || 0 }) : t('se.upd.idle');
   return (
     <>
-      <header className="page-header"><div><h1>הגדרות</h1></div></header>
+      <header className="page-header"><div><h1>{t('se.title')}</h1></div></header>
       <section className="card settings">
         <div className="setting">
-          <div><div className="setting-title">עדכוני תוכנה</div><div className="row-meta">גרסה {version || '…'} · {msg}</div></div>
-          <button className="btn-ghost" onClick={onCheck}><RefreshCw size={14} /> בדוק עדכונים</button>
+          <div><div className="setting-title"><Globe size={15} style={{ verticalAlign: -2 }} /> {t('se.language')}</div><div className="row-meta">{t('se.languageNote')}</div></div>
+          {/* Each language is named in itself, so it can be found from either one. */}
+          <div className="segmented">
+            <button className={t.lang === 'en' ? 'on' : ''} onClick={() => onLang('en')}>English</button>
+            <button className={t.lang === 'he' ? 'on' : ''} onClick={() => onLang('he')}>עברית</button>
+          </div>
         </div>
         <div className="setting">
-          <div><div className="setting-title">תיקיית שמירה</div><div className="row-meta" dir="ltr" style={{ textAlign: 'right' }}>{settings?.saveDir || '…'}</div><div className="row-meta">לשם יורדים קבצי BIOS ותוכנות התקנה, ונשמרים ייצואי החומרה.</div></div>
-          <button className="btn-ghost" onClick={onPickDir}><FolderOpen size={14} /> שנה</button>
+          <div><div className="setting-title">{t('se.updates')}</div><div className="row-meta">{t('se.versionLine', { v: version || '…', msg })}</div></div>
+          <button className="btn-ghost" onClick={onCheck}><RefreshCw size={14} /> {t('se.check')}</button>
+        </div>
+        <div className="setting">
+          <div><div className="setting-title">{t('se.saveDir')}</div><div className="row-meta path-text" dir="ltr">{settings?.saveDir || '…'}</div><div className="row-meta">{t('se.saveDirNote')}</div></div>
+          <button className="btn-ghost" onClick={onPickDir}><FolderOpen size={14} /> {t('se.change')}</button>
         </div>
         <div className="setting">
           <div>
-            <div className="setting-title">שירות רקע · {svcText}</div>
-            <div className="row-meta">אישור אחד בהתקנה, ואחר כך דרייברים, ניקוי והגדרות בלי חלונות אישור. גם קורא את טמפ׳ המעבד דרך PawnIO (דרייבר חתום וקוד פתוח). רץ רק פעולות מרשימה קבועה, ורק משתמשים שמחוברים למחשב יכולים לפנות אליו.</div>
-            {!service?.running && <div className="row-meta">בלי השירות: אישור אחד ב-Windows מכסה את כל הפעולות ל-10 דקות.</div>}
+            <div className="setting-title">{t('se.service', { status: svcText })}</div>
+            <div className="row-meta">{t('se.serviceNote')}</div>
+            {!service?.running && <div className="row-meta">{t('se.noService')}</div>}
           </div>
           <div className="header-actions">
-            {busy === 'service' ? <ProgressPill p={prog.service} fallback="עובד…" /> : (<>
-              {(!service?.running || !service.current) && <button className="btn-primary" onClick={onInstallService} disabled={!!busy}><ShieldCheck size={14} /> {service?.installed ? 'עדכן והפעל' : 'התקן'}</button>}
-              {service?.installed && <button className="btn-ghost" onClick={onRemoveService} disabled={!!busy}>הסר</button>}
+            {busy === 'service' ? <ProgressPill p={prog.service} fallback={t('prog.working')} /> : (<>
+              {(!service?.running || !service.current) && <button className="btn-primary" onClick={onInstallService} disabled={!!busy}><ShieldCheck size={14} /> {t(service?.installed ? 'se.installUpdate' : 'se.install')}</button>}
+              {service?.installed && <button className="btn-ghost" onClick={onRemoveService} disabled={!!busy}>{t('se.remove')}</button>}
             </>)}
           </div>
         </div>
         <div className="setting">
-          <div><div className="setting-title">מקורות</div><div className="row-meta">Windows Update (דרייברים שהיצרנים מפרסמים, חתומים ע״י Microsoft), אתרי AMD, NVIDIA ו-Intel לכרטיסי מסך, ואתר ASUS ל-BIOS (קובץ נבדק מול החתימה שפורסמה).</div></div>
+          <div><div className="setting-title">{t('se.sources')}</div><div className="row-meta">{t('se.sourcesNote')}</div></div>
         </div>
         <div className="setting">
-          <div><div className="setting-title">בטיחות</div><div className="row-meta">לפני כל התקנת דרייבר נוצרת נקודת שחזור. כל שינוי נרשם בהיסטוריה.</div></div>
+          <div><div className="setting-title">{t('se.safety')}</div><div className="row-meta">{t('se.safetyNote')}</div></div>
         </div>
       </section>
     </>
@@ -710,8 +722,15 @@ export default function App() {
   const [guide, setGuide] = useState(false);
   const [settings, setSettings] = useState(null);
   const [service, setService] = useState(null);
-  const loadService = useCallback(async () => setService(await api.serviceStatus()), []);
+  // English until the saved choice is read; a first launch stays English.
+  const t = useMemo(() => makeT(settings?.lang || 'en'), [settings?.lang]);
 
+  useEffect(() => {
+    document.documentElement.lang = t.lang;
+    document.documentElement.dir = t.lang === 'he' ? 'rtl' : 'ltr';
+  }, [t]);
+
+  const loadService = useCallback(async () => setService(await api.serviceStatus()), []);
   const loadJunk = useCallback(async () => { setJunk(null); const r = await api.junkScan(); setJunk(r.ok ? [].concat(r.data) : []); }, []);
   const loadStartup = useCallback(async () => { const r = await api.startupList(); setStartup(r.ok ? [].concat(r.data || []) : []); }, []);
   const loadPerf = useCallback(async () => { const r = await api.performance(); if (r.ok) setPerf(r.data); }, []);
@@ -726,12 +745,13 @@ export default function App() {
   }, []);
 
   // Full scan: components, then every update source at once, then the optimization pages.
+  // Step labels are dictionary keys, so they follow a language change mid-scan.
   const fullScan = useCallback(async () => {
     const step = (n, label) => setScan((s) => ({ ...s, running: true, step: n, label }));
-    step(1, 'רכיבים ודרייברים מותקנים');
+    step(1, 'scan.s1');
     const h = await api.scanHardware();
     if (h.ok) setHw(h.data);
-    step(2, 'Windows Update, אתרי היצרנים ו-BIOS');
+    step(2, 'scan.s2');
     const board = h.ok ? { maker: h.data.boardMaker, model: h.data.boardModel, version: h.data.bios.version, date: h.data.bios.date, systemMaker: h.data.systemMaker, systemModel: h.data.systemModel, systemSku: h.data.systemSku } : null;
     const [w, g, b] = await Promise.all([
       api.driverUpdates(),
@@ -739,10 +759,10 @@ export default function App() {
       board ? api.biosCheck(board) : Promise.resolve({ ok: false }),
     ]);
     setWu(w.ok ? [].concat(w.data || []) : []);
-    if (!w.ok) setMsg({ kind: 'err', text: `Windows Update לא ענה: ${w.error}` });
+    if (!w.ok) setMsg({ kind: 'err', key: 'msg.wuFailed', vars: { e: w.error } });
     setGpu(g.ok ? [].concat(g.data || []) : []);
     setBios(b.ok ? b.data : { supported: false, page: null });
-    step(3, 'קבצים מיותרים, הפעלה עם Windows, הגדרות וביצועים');
+    step(3, 'scan.s3');
     await Promise.all([loadJunk(), loadStartup(), loadRecs(), loadPerf()]);
     setScan((s) => ({ ...s, running: false, at: Date.now() }));
   }, [loadJunk, loadStartup, loadRecs, loadPerf]);
@@ -770,7 +790,7 @@ export default function App() {
     setBusy(null);
     setProg((m) => ({ ...m, [key]: null }));
     if (admin || r?.adminUntil) api.adminStatus().then(setAdminUntil);
-    if (!r?.ok) setMsg({ kind: 'err', text: errText(r?.error) });
+    if (!r?.ok) setMsg({ kind: 'err', text: errText(r?.error, t) });
     else if (done) setMsg({ kind: 'info', text: done(r.data) });
     return r;
   };
@@ -780,67 +800,76 @@ export default function App() {
     return act(key, () => api.installDrivers(items, key), (d) => {
       const okCount = (d.results || []).filter((x) => x.code === 2 || x.code === 3).length;
       scanDrivers();
-      return `הותקנו ${okCount} מתוך ${items.length}. נקודת שחזור: ${d.restore === 'created' ? 'נוצרה' : d.restore === 'recent' ? 'קיימת כבר אחת מהיממה האחרונה' : 'לא נוצרה (' + d.restore + ')'}.${d.reboot ? ' נדרשת הפעלה מחדש כדי להשלים.' : ''}`;
+      const rp = d.restore === 'created' ? t('msg.rpCreated') : d.restore === 'recent' ? t('msg.rpRecent') : t('msg.rpNot', { e: d.restore });
+      return t('msg.installed', { ok: okCount, n: items.length }) + rp + (d.reboot ? t('msg.rebootNeeded') : '');
     }, { admin: true });
   };
-  const gpuInstall = (g) => act(g.gpu, () => api.gpuInstaller(g.url, g.gpu), () => `תוכנת ההתקנה הרשמית של ${g.vendor} הורדה, החתימה שלה אומתה, והיא נפתחה. ההתקנה ממשיכה בחלון שלה.`);
-  const biosDownload = () => act('bios', () => api.biosDownload(bios.latest, 'bios'), () => { setGuide(true); return `BIOS ${bios.latest.version} הורד ואומת מול החתימה של ${bios.maker}. התיקייה נפתחה, וההוראות מוצגות.`; });
-  const enable = (p) => act(p.id, () => api.enableDevice(p), () => { scanDrivers(); return `${p.name} הופעל.`; }, { admin: true });
-  const clean = (cats) => act('clean', () => api.junkClean(cats), (d) => { loadJunk(); return `פונו ${fmtGB(d.freed)}.${d.skipped ? ` ${d.skipped} קבצים בשימוש דולגו.` : ''}${d.adminError ? ` התיקיות של Windows לא נוקו (${errText(d.adminError)}).` : ''}`; }, { admin: cats.some((c) => c.admin) });
-  const toggle = (s, en) => act(s.source + s.key, () => api.startupToggle(s, en), () => { loadStartup(); return `${s.name} ${en ? 'תעלה' : 'לא תעלה'} עם Windows.`; }, { admin: s.admin });
-  const apply = (r) => act(r.key, () => api.applyRecommendation(r), (d) => { loadRecs(); return d === 'reboot' ? `${r.title} הופעל. ייכנס לתוקף אחרי הפעלה מחדש.` : `${r.title} עודכן.`; }, { admin: r.key === 'hags' });
-  const restorePoint = () => act('restore', () => api.createRestorePoint(), (d) => (d === 'created' ? 'נקודת שחזור נוצרה.' : 'Windows יוצר נקודת שחזור אחת ביממה, וכבר קיימת אחת מהיממה האחרונה. אפשר לחזור אליה.'), { admin: true });
-  const exportHw = (format) => act('export', () => api.exportHardware(hw, format), (file) => `נשמר: ${file}`);
-  const adminStart = () => act('admin', () => api.adminStart(), () => 'הרשאת מנהל פעילה ל-10 דקות. פעולות שדורשות אותה לא יבקשו אישור נוסף.', { admin: true });
+  const gpuInstall = (g) => act(g.gpu, () => api.gpuInstaller(g.url, g.gpu), () => t('msg.gpuDone', { vendor: g.vendor }));
+  const biosDownload = () => act('bios', () => api.biosDownload(bios.latest, 'bios'), () => { setGuide(true); return t('msg.biosDone', { v: bios.latest.version, maker: bios.maker }); });
+  const enable = (p) => act(p.id, () => api.enableDevice(p), () => { scanDrivers(); return t('msg.enabled', { name: p.name }); }, { admin: true });
+  const clean = (cats) => act('clean', () => api.junkClean(cats), (d) => {
+    loadJunk();
+    return t('msg.cleaned', { size: fmtGB(d.freed) }) + (d.skipped ? t('msg.skipped', { n: d.skipped }) : '') + (d.adminError ? t('msg.adminPartFailed', { e: errText(d.adminError, t) }) : '');
+  }, { admin: cats.some((c) => c.admin) });
+  const toggle = (s, en) => act(s.source + s.key, () => api.startupToggle(s, en), () => { loadStartup(); return t(en ? 'msg.startupOn' : 'msg.startupOff', { name: s.name }); }, { admin: s.admin });
+  const apply = (r) => act(r.key, () => api.applyRecommendation(r), (d) => { loadRecs(); return t(d === 'reboot' ? 'msg.recReboot' : 'msg.recDone', { title: recTitle(r, t) }); }, { admin: r.key === 'hags' });
+  const restorePoint = () => act('restore', () => api.createRestorePoint(), (d) => t(d === 'created' ? 'msg.rpCreatedFull' : 'msg.rpRecentFull'), { admin: true });
+  const exportHw = (format) => act('export', () => api.exportHardware(hw, format), (file) => t('msg.saved', { file }));
+  const adminStart = () => act('admin', () => api.adminStart(), () => t('msg.adminOn'), { admin: true });
   const adminStop = async () => { await api.adminStop(); setAdminUntil(0); };
   const installService = () => act('service', () => api.installService(), (d) => {
     loadService();
     loadPerf();
-    const pawn = { installed: ' ו-PawnIO הותקן: טמפ׳ המעבד מוצגת בעמוד מעבד וזיכרון.', present: '', reboot: ' PawnIO הותקן, וצריך להפעיל מחדש את המחשב כדי שטמפ׳ המעבד תופיע.' }[d.pawnio]
-      ?? ` PawnIO לא הותקן (${d.pawnio}), אז טמפ׳ המעבד לא תוצג.`;
-    return `שירות הרקע מותקן ופועל: מעכשיו בלי חלונות אישור.${pawn}`;
+    const pawn = { installed: t('msg.pawnInstalled'), present: '', reboot: t('msg.pawnReboot') }[d.pawnio] ?? t('msg.pawnFailed', { e: d.pawnio });
+    return t('msg.svcInstalled') + pawn;
   }, { admin: true });
-  const removeService = () => window.confirm('להסיר את שירות הרקע? פעולות שדורשות הרשאת מנהל יבקשו שוב אישור, וטמפ׳ המעבד לא תוצג. (PawnIO נשאר מותקן ואפשר להסיר אותו מרשימת האפליקציות של Windows.)')
-    && act('service', () => api.uninstallService(), () => { loadService(); return 'שירות הרקע הוסר.'; }, { admin: true });
+  const removeService = () => window.confirm(t('msg.svcRemoveConfirm'))
+    && act('service', () => api.uninstallService(), () => { loadService(); return t('msg.svcRemoved'); }, { admin: true });
+  const setLang = async (lang) => setSettings(await api.setLanguage(lang));
 
   const updatesCount = (wu?.length || 0) + (gpu || []).filter((g) => g.newer && g.url).length + (bios?.supported && bios.newer ? 1 : 0);
+  const Crumb = t.lang === 'he' ? ChevronLeft : ChevronRight;
+  // A message stored as a key (from the scan) is translated when shown.
+  const shownMsg = msg && msg.key ? { ...msg, text: t(msg.key, msg.vars) } : msg;
 
   return (
-    <div className="app">
-      <aside className="sidebar">
-        <div className="brand"><span>Tune</span><SlidersHorizontal size={24} strokeWidth={2.4} className="brand-icon" /></div>
-        <nav>
-          {PAGES.map((p, i) => (p.group !== undefined
-            ? <div key={`g${i}`} className="nav-group">{p.group}</div>
-            : (
-              <button key={p.id} className={`nav-item ${page === p.id ? 'active' : ''}`} onClick={() => setPage(p.id)}>
-                <span>{p.label}</span>
-                {p.id === 'updates' && updatesCount > 0 && <span className="nav-badge">{updatesCount}</span>}
-                <p.icon size={18} />
-              </button>
-            )))}
-        </nav>
-        <div className="sidebar-footer">
-          <AdminChip service={service} until={adminUntil} onStart={adminStart} onStop={adminStop} onInstall={installService} busy={busy} />
-          <div><span className={`dot ${scan.running ? 'dot-off' : ''}`} /> {scan.running ? 'סורק…' : 'הסריקה הושלמה'}</div>
-          <div className="muted">גרסה {version || '…'}</div>
-        </div>
-      </aside>
-      <main className="main">
-        <div className="breadcrumbs"><Home size={15} /> <ChevronLeft size={13} /> <span>{pageLabel(page)}</span></div>
-        <UpdateBanner status={appUpdate} />
-        <Banner msg={msg} onClose={() => setMsg(null)} />
-        {page === 'updates' && <UpdatesPage hw={hw} wu={wu} gpu={gpu} bios={bios} scan={scan} onScan={fullScan} onInstall={installDrivers} onGpu={gpuInstall} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} onEnable={enable} busy={busy} prog={prog} />}
-        {page === 'hardware' && <HardwarePage hw={hw} onExport={exportHw} />}
-        {page === 'overview' && <OverviewPage junk={junk} startup={startup} perf={perf} recs={recs} go={setPage} />}
-        {page === 'clean' && <CleanPage junk={junk} onRescan={loadJunk} onClean={clean} busy={busy} />}
-        {page === 'startup' && <StartupPage startup={startup} onToggle={toggle} busy={busy} prog={prog} />}
-        {page === 'perf' && <PerfPage perf={perf} onRefresh={() => { setPerf(null); loadPerf(); }} onInstallService={installService} busy={busy} />}
-        {page === 'recs' && <RecsPage recs={recs} bios={bios} onApply={apply} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} busy={busy} prog={prog} />}
-        {page === 'history' && <HistoryPage busy={busy} onRestorePoint={restorePoint} />}
-        {page === 'settings' && <SettingsPage version={version} status={appUpdate} settings={settings} service={service} onInstallService={installService} onRemoveService={removeService} busy={busy} prog={prog} onPickDir={async () => setSettings(await api.pickSaveDir())} onCheck={async () => { setAppUpdate({ state: 'checking' }); if (!(await api.checkAppUpdate())) setAppUpdate({ state: 'dev' }); }} />}
-      </main>
-      {guide && bios?.latest && <BiosGuide bios={bios} onClose={() => setGuide(false)} onDownload={biosDownload} busy={busy === 'bios'} prog={prog.bios} />}
-    </div>
+    <LangContext.Provider value={t}>
+      <div className="app">
+        <aside className="sidebar">
+          <div className="brand"><span>Tune</span><SlidersHorizontal size={24} strokeWidth={2.4} className="brand-icon" /></div>
+          <nav>
+            {PAGES.map((p, i) => (p.group !== undefined
+              ? <div key={`g${i}`} className="nav-group">{p.group ? t(p.group) : ''}</div>
+              : (
+                <button key={p.id} className={`nav-item ${page === p.id ? 'active' : ''}`} onClick={() => setPage(p.id)}>
+                  <span>{t(p.key)}</span>
+                  {p.id === 'updates' && updatesCount > 0 && <span className="nav-badge">{updatesCount}</span>}
+                  <p.icon size={18} />
+                </button>
+              )))}
+          </nav>
+          <div className="sidebar-footer">
+            <AdminChip service={service} until={adminUntil} onStart={adminStart} onStop={adminStop} onInstall={installService} busy={busy} />
+            <div><span className={`dot ${scan.running ? 'dot-off' : ''}`} /> {scan.running ? t('scanning') : t('sb.done')}</div>
+            <div className="muted">{t('version', { v: version || '…' })}</div>
+          </div>
+        </aside>
+        <main className="main">
+          <div className="breadcrumbs"><Home size={15} /> <Crumb size={13} /> <span>{t(PAGES.find((p) => p.id === page)?.key || '')}</span></div>
+          <UpdateBanner status={appUpdate} />
+          <Banner msg={shownMsg} onClose={() => setMsg(null)} />
+          {page === 'updates' && <UpdatesPage hw={hw} wu={wu} gpu={gpu} bios={bios} scan={scan} onScan={fullScan} onInstall={installDrivers} onGpu={gpuInstall} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} onEnable={enable} busy={busy} prog={prog} />}
+          {page === 'hardware' && <HardwarePage hw={hw} onExport={exportHw} />}
+          {page === 'overview' && <OverviewPage junk={junk} startup={startup} perf={perf} recs={recs} go={setPage} />}
+          {page === 'clean' && <CleanPage junk={junk} onRescan={loadJunk} onClean={clean} busy={busy} />}
+          {page === 'startup' && <StartupPage startup={startup} onToggle={toggle} busy={busy} prog={prog} />}
+          {page === 'perf' && <PerfPage perf={perf} onRefresh={() => { setPerf(null); loadPerf(); }} onInstallService={installService} busy={busy} />}
+          {page === 'recs' && <RecsPage recs={recs} bios={bios} onApply={apply} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} busy={busy} prog={prog} />}
+          {page === 'history' && <HistoryPage busy={busy} onRestorePoint={restorePoint} />}
+          {page === 'settings' && <SettingsPage version={version} status={appUpdate} settings={settings} onLang={setLang} service={service} onInstallService={installService} onRemoveService={removeService} busy={busy} prog={prog} onPickDir={async () => setSettings(await api.pickSaveDir())} onCheck={async () => { setAppUpdate({ state: 'checking' }); if (!(await api.checkAppUpdate())) setAppUpdate({ state: 'dev' }); }} />}
+        </main>
+        {guide && bios?.latest && <BiosGuide bios={bios} onClose={() => setGuide(false)} onDownload={biosDownload} busy={busy === 'bios'} prog={prog.bios} />}
+      </div>
+    </LangContext.Provider>
   );
 }

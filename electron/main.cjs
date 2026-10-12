@@ -20,7 +20,8 @@ const settingsFile = () => path.join(app.getPath('userData'), 'settings.json');
 function getSettings() {
   let s = {};
   try { s = JSON.parse(fs.readFileSync(settingsFile(), 'utf8')); } catch { /* first run */ }
-  return { saveDir: s.saveDir && fs.existsSync(s.saveDir) ? s.saveDir : app.getPath('downloads') };
+  // English unless the user picked Hebrew in Settings.
+  return { saveDir: s.saveDir && fs.existsSync(s.saveDir) ? s.saveDir : app.getPath('downloads'), lang: s.lang === 'he' ? 'he' : 'en' };
 }
 function saveSettings(s) {
   fs.mkdirSync(app.getPath('userData'), { recursive: true });
@@ -94,7 +95,7 @@ ipcMain.handle('junk:scan', async () => {
 ipcMain.handle('folder:open', (_e, dir) => (junkDirs.has(dir) ? shell.openPath(dir) : null));
 ipcMain.handle('junk:clean', async (_e, cats) => {
   const r = await sys.junkClean(cats.map((c) => c.key));
-  if (r.ok) addHistory('clean', { cats: cats.map((c) => c.label), freed: r.data.freed });
+  if (r.ok) addHistory('clean', { cats: cats.map((c) => c.key), freed: r.data.freed });
   return r;
 });
 ipcMain.handle('startup:list', () => sys.startupList());
@@ -107,7 +108,7 @@ ipcMain.handle('perf:get', () => sys.performance());
 ipcMain.handle('rec:list', () => sys.recommendations());
 ipcMain.handle('rec:apply', async (_e, rec) => {
   const r = await sys.applyRecommendation(rec.key);
-  if (r.ok) addHistory('setting', { title: rec.title });
+  if (r.ok) addHistory('setting', { key: rec.key });
   return r;
 });
 ipcMain.handle('restore:create', async () => {
@@ -141,6 +142,10 @@ ipcMain.handle('admin:start', () => sys.adminStart());
 ipcMain.handle('admin:stop', () => sys.adminStop());
 
 ipcMain.handle('settings:get', () => getSettings());
+ipcMain.handle('settings:setLang', (_e, lang) => {
+  saveSettings({ ...getSettings(), lang: lang === 'he' ? 'he' : 'en' });
+  return getSettings();
+});
 ipcMain.handle('settings:pickDir', async () => {
   const r = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory', 'createDirectory'], defaultPath: getSettings().saveDir });
   if (!r.canceled && r.filePaths[0]) saveSettings({ ...getSettings(), saveDir: r.filePaths[0] });

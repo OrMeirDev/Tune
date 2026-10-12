@@ -1,6 +1,6 @@
 # Tune
 
-Windows driver updater and PC optimizer with a Hebrew, right-to-left interface. Drivers come only from official sources, and nothing on the system changes without a click.
+Windows driver updater and PC optimizer, in English and Hebrew (right-to-left), switchable in Settings. Drivers come only from official sources, and nothing on the system changes without a click.
 
 ## Install
 
