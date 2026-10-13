@@ -45,7 +45,7 @@ namespace Tune
 
     public class TuneService : ServiceBase
     {
-        public const string Version = "4";
+        public const string Version = "5";
         // Another name only for testing a new build next to the installed service (--console --pipe X).
         static string PipeName = "TuneService";
         const int MaxRequest = 64 * 1024;
@@ -297,6 +297,40 @@ namespace Tune
             if (clock > 0) r["cpuClockMHz"] = Round(clock);
         }
 
+        // ---------- power limits (Intel, read only) ----------
+        // The package power limits the BIOS set (PL1 = long-term, PL2 = short boost), read from the
+        // processor: MSR 0x606 holds the units, MSR 0x610 the limits. Nothing is ever written. They only
+        // change with a BIOS setting, so one reading a minute is plenty.
+        static Dictionary<string, object> limitsCache;
+        static DateTime limitsAt = DateTime.MinValue;
+
+        static Dictionary<string, object> PowerLimits()
+        {
+            if (CpuVendor() != "GenuineIntel") return null;
+            if ((DateTime.UtcNow - limitsAt).TotalSeconds < 60) return limitsCache;
+            limitsAt = DateTime.UtcNow;
+            limitsCache = null;
+            try
+            {
+                var msr = new LibreHardwareMonitor.PawnIo.IntelMsr();
+                try
+                {
+                    ulong units, lim;
+                    if (!msr.ReadMsr(0x606, out units) || !msr.ReadMsr(0x610, out lim)) return null;
+                    double pu = 1.0 / Math.Pow(2, (int)(units & 0xF));
+                    limitsCache = new Dictionary<string, object> {
+                        { "pl1W", Math.Round((lim & 0x7FFF) * pu, 1) },
+                        { "pl1On", ((lim >> 15) & 1) == 1 },
+                        { "pl2W", Math.Round(((lim >> 32) & 0x7FFF) * pu, 1) },
+                        { "pl2On", ((lim >> 47) & 1) == 1 },
+                    };
+                }
+                finally { msr.Close(); }
+            }
+            catch (Exception) { limitsCache = null; }
+            return limitsCache;
+        }
+
         Dictionary<string, object> Sensors()
         {
             var r = new Dictionary<string, object> { { "pawnio", PawnIoVersion() } };
@@ -326,6 +360,8 @@ namespace Tune
                 }
             }
             if (!r.ContainsKey("cpuTempC")) r["cpuNote"] = PawnIoVersion() == null ? "pawnio not installed" : "no reading";
+            var limits = PowerLimits();
+            if (limits != null) r["powerLimits"] = limits;
             r["gpus"] = gpus;
             return r;
         }

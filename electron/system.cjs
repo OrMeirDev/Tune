@@ -594,7 +594,7 @@ function adminStop() {
 
 // Tune Service (service/TuneService.cs) runs the same operations as LocalSystem, so once it is
 // installed nothing asks for approval. Without it, Tune falls back to the 10-minute admin session.
-const SERVICE_VERSION = '4';
+const SERVICE_VERSION = '5';
 const PIPE = '\\\\.\\pipe\\TuneService';
 // The official, signed PawnIO installer, pinned to the exact file checked when this was written.
 const PAWNIO_SETUP = {
@@ -812,6 +812,7 @@ const liveCpu = (s) => {
     cpuPowerW: d.cpuPowerW ?? null,
     cpuVoltageV: d.cpuVoltageV ?? null,
     cpuClockMHz: d.cpuClockMHz ?? null,
+    powerLimits: d.powerLimits ?? null,
     cpuNote: !s ? 'no service' : s.ok ? d.cpuNote : s.error,
   };
 };

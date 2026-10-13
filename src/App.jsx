@@ -426,7 +426,7 @@ const recValue = (r, t) => ({
   disk: t('rec.disk.value', { free: r.freeGB, size: r.sizeGB }),
   bios: `${r.version} (${r.date})`,
   microcode: r.hex,
-  powerLimit: r.powerW != null ? t('rec.powerLimit.value', { w: r.powerW, t: r.tempC ?? '—' }) : '',
+  powerLimit: [r.limits && t('rec.powerLimit.set', { pl1: r.limits.pl1W, pl2: r.limits.pl2W }), r.powerW != null && t('rec.powerLimit.value', { w: r.powerW, t: r.tempC ?? '—' })].filter(Boolean).join(' · '),
   memChannels: r.channels == null ? t('rec.memChannels.unknown') : t(r.channels >= 2 ? 'rec.memChannels.dual' : r.sticks > 1 ? 'rec.memChannels.sameOne' : 'rec.memChannels.one', { n: r.sticks }),
   memSpeed: r.rated ? t('rec.memSpeed.value', { now: r.configured, rated: r.rated }) : `${r.configured} MT/s`,
   trim: t(r.on ? 'on' : 'off'),
@@ -705,7 +705,13 @@ function centerItems({ recs, bios, gpu, junk, startup, live, history = [] }) {
     if (r.key === 'bios') return { ...r, ok: bios?.supported ? !bios.newer : null };
     // The power-limit tip turns into a finding when the CPU has been very hot for the last half
     // minute (not on one momentary jump).
-    if (r.key === 'powerLimit') return { ...r, ok: history.length >= 5 && recent >= 90 ? false : null, tempC: recent ?? live?.cpuTempC, powerW: live?.cpuPowerW };
+    // When the processor reports a long-term limit (PL1) below the unlimited ~253 W, the limit is
+    // set: the row is fine, and the guide stays for anyone who wants to change it.
+    if (r.key === 'powerLimit') {
+      const pl = live?.powerLimits;
+      const limited = !!(pl && pl.pl1On && pl.pl1W > 0 && pl.pl1W < 250);
+      return { ...r, ok: limited ? true : history.length >= 5 && recent >= 90 ? false : null, limits: limited ? pl : null, tempC: recent ?? live?.cpuTempC, powerW: live?.cpuPowerW };
+    }
     return r;
   });
   const drivers = (gpu || []).filter((g) => g.vendor !== 'Intel' && g.latest);
