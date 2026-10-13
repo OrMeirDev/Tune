@@ -3,17 +3,12 @@ import {
   RefreshCw, Cpu, Sparkles, Trash2, Rocket, Thermometer, Settings2, History, Settings, Home,
   ChevronLeft, ChevronRight, Download, Monitor, Wifi, Bluetooth, Network, Volume2, HardDrive, Usb, Camera, AlertTriangle, Check,
   Loader2, ShieldCheck, ExternalLink, Search, Undo2, RotateCcw, FolderOpen, FileSpreadsheet, FileText,
-  CircuitBoard, ScanSearch, Info, X, Globe, MemoryStick, Gauge, Zap, Activity, BookOpen,
+  CircuitBoard, ScanSearch, Info, X, Globe, MemoryStick, Gauge, Zap, Activity, BookOpen, CircleCheck, CircleAlert,
 } from 'lucide-react';
-import logo1x from './assets/logo-1x.png';
-import logo125 from './assets/logo-1_25x.png';
-import logo15 from './assets/logo-1_5x.png';
-import logo2x from './assets/logo-2x.png';
+// The Tune name with its symbol on the right (vector, from the brand package).
+import brandLockup from './assets/brand/logo-lockup.svg';
 
 import { LangContext, makeT, useT } from './i18n.js';
-
-// The app icon beside the name, drawn at its exact size for each display scale so it stays sharp.
-const LOGO_SET = `${logo1x} 1x, ${logo125} 1.25x, ${logo15} 1.5x, ${logo2x} 2x`;
 
 const api = window.tune;
 
@@ -31,6 +26,8 @@ const PAGES = [
   { id: 'history', icon: History, key: 'nav.history' },
   { id: 'settings', icon: Settings, key: 'nav.settings' },
 ];
+// The pages in their sidebar groups (each group is one glass panel).
+const NAV_GROUPS = PAGES.reduce((gs, p) => (p.group !== undefined ? [...gs, { group: p.group, pages: [] }] : (gs.at(-1).pages.push(p), gs)), []);
 
 // Keeps "8.67 GB" in reading order inside Hebrew text (harmless in English).
 const ltr = (s) => '⁦' + s + '⁩';
@@ -257,11 +254,11 @@ function UpdatesPage({ hw, wu, gpu, bios, scan, soundKey, onScan, onInstall, onG
           {loading ? <Loader2 size={14} className="spin" /> : <ScanSearch size={14} />} {t('up.scanNow')}
         </button>
       </header>
-      <div className="stats">
-        <div className="stat"><span>{t('up.stScanned')}</span><b>{hw ? hw.devices.length : '…'}</b></div>
-        <div className="stat"><span>{t('up.stAvailable')}</span><b style={{ color: 'var(--accent)' }}>{loading ? '…' : total}</b></div>
-        <div className="stat"><span>{t('up.stUpToDate')}</span><b>{hw && !loading ? hw.devices.length - (wu?.length || 0) : '…'}</b></div>
-        <div className="stat"><span>{t('up.stAttention')}</span><b style={{ color: problems.length ? '#b45309' : undefined }}>{hw ? problems.length : '…'}</b></div>
+      <div className="stats tiled">
+        <div className="stat"><i className="stat-tile"><HardDrive size={20} /></i><span>{t('up.stScanned')}</span><b>{hw ? hw.devices.length : '…'}</b></div>
+        <div className="stat"><i className="stat-tile"><Download size={20} /></i><span>{t('up.stAvailable')}</span><b style={{ color: 'var(--accent)' }}>{loading ? '…' : total}</b></div>
+        <div className="stat"><i className="stat-tile"><CircleCheck size={20} /></i><span>{t('up.stUpToDate')}</span><b>{hw && !loading ? hw.devices.length - (wu?.length || 0) : '…'}</b></div>
+        <div className="stat"><i className="stat-tile"><CircleAlert size={20} /></i><span>{t('up.stAttention')}</span><b style={{ color: problems.length ? '#b45309' : undefined }}>{hw ? problems.length : '…'}</b></div>
       </div>
       <section className="panel">
         <div className="panel-title">{t('up.available')} {loading && <Loader2 size={15} className="spin" />}</div>
@@ -1083,17 +1080,22 @@ export default function App() {
     <LangContext.Provider value={t}>
       <div className="app">
         <aside className="sidebar">
-          <div className="brand"><span>Tune</span><img className="brand-logo" src={logo1x} srcSet={LOGO_SET} width={34} height={34} alt="" draggable={false} /></div>
+          <div className="brand"><img className="brand-lockup" src={brandLockup} alt="Tune" draggable={false} /></div>
           <nav>
-            {PAGES.map((p, i) => (p.group !== undefined
-              ? <div key={`g${i}`} className="nav-group">{p.group ? t(p.group) : ''}</div>
-              : (
-                <button key={p.id} className={`nav-item ${page === p.id ? 'active' : ''}`} onClick={() => setPage(p.id)}>
-                  <span>{t(p.key)}</span>
-                  {p.id === 'updates' && updatesCount > 0 && <span className="nav-badge">{updatesCount}</span>}
-                  <p.icon size={18} />
-                </button>
-              )))}
+            {NAV_GROUPS.map((g, i) => (
+              <React.Fragment key={i}>
+                {g.group && <div className="nav-group">{t(g.group)}</div>}
+                <div className="nav-panel">
+                  {g.pages.map((p) => (
+                    <button key={p.id} className={`nav-item ${page === p.id ? 'active' : ''}`} onClick={() => setPage(p.id)}>
+                      <span>{t(p.key)}</span>
+                      {p.id === 'updates' && updatesCount > 0 && <span className="nav-badge">{updatesCount}</span>}
+                      <p.icon size={18} />
+                    </button>
+                  ))}
+                </div>
+              </React.Fragment>
+            ))}
           </nav>
           <div className="sidebar-footer">
             <AdminChip service={service} until={adminUntil} onStart={adminStart} onStop={adminStop} onInstall={installService} busy={busy} />

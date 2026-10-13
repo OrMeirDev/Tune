@@ -201,7 +201,7 @@ function createWindow() {
     minHeight: Math.min(640, area.height),
     center: true,
     title: 'Tune',
-    backgroundColor: '#f6f7fb',
+    backgroundColor: '#f4f8fe',
     autoHideMenuBar: true,
     show: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.cjs') },

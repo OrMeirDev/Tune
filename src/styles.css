@@ -524,6 +524,35 @@ html[dir=ltr] .path-text { text-align: left; }
 }
 .panel > .all-good { min-height: calc(100% - 42px); }
 
-/* The app icon beside the name: exact-size images (no resampling blur) with a soft glow in the
-   app's color, so the glass icon lifts off the sidebar. */
-.brand-logo { display: block; flex-shrink: 0; filter: drop-shadow(0 3px 8px color-mix(in srgb, var(--accent) 35%, transparent)); user-select: none; -webkit-user-drag: none; }
+
+/* 2026 design: the sidebar groups sit in glass panels, and the summary cards on the updates page
+   carry their icon in a small glass tile at the far side. */
+.sidebar nav { gap: 6px; }
+.nav-panel { display: flex; flex-direction: column; }
+.nav-panel + .nav-panel { margin-top: 6px; }
+.sidebar .nav-group { margin: 10px 14px 2px; }
+.sidebar .nav-item { min-height: 44px; padding-block: 8px; border-radius: 15px; }
+.sidebar .nav-item svg { width: 20px; height: 20px; flex-shrink: 0; }
+.stats.tiled .stat { display: grid; grid-template-columns: 1fr auto; grid-template-rows: auto auto; align-items: center; column-gap: 12px; }
+.stats.tiled .stat > span { grid-column: 1; grid-row: 1; }
+.stats.tiled .stat > b { grid-column: 1; grid-row: 2; }
+.stats.tiled .stat-tile {
+  grid-column: 2; grid-row: 1 / span 2; display: grid; place-items: center; width: 46px; height: 46px; border-radius: 15px;
+  color: var(--accent); background: rgba(var(--accent-rgb), .08); border: 1px solid rgba(var(--accent-rgb), .14);
+  box-shadow: inset 0 1px 0 var(--edge), var(--shadow-control);
+}
+@media (max-height: 760px) {
+  .sidebar .nav-item { min-height: 36px; padding-block: 4px; }
+  .sidebar nav, .nav-panel + .nav-panel { gap: 3px; margin-top: 0; }
+  .stats.tiled .stat-tile { width: 38px; height: 38px; border-radius: 12px; }
+}
+@media (max-height: 680px) {
+  .sidebar { padding-block: 14px 12px; }
+  .brand-lockup { height: 40px; }
+  .sidebar .nav-item { min-height: 33px; font-size: 14.5px; }
+  .sidebar .nav-group { margin-top: 4px; font-size: 11.5px; }
+}
+@media (max-width: 1150px) {
+  .sidebar .nav-item { padding-inline: 12px; gap: 8px; }
+  .stats.tiled .stat-tile { width: 36px; height: 36px; border-radius: 12px; }
+}
