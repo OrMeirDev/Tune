@@ -567,7 +567,7 @@ function adminStop() {
 
 // Tune Service (service/TuneService.cs) runs the same operations as LocalSystem, so once it is
 // installed nothing asks for approval. Without it, Tune falls back to the 10-minute admin session.
-const SERVICE_VERSION = '3';
+const SERVICE_VERSION = '4';
 const PIPE = '\\\\.\\pipe\\TuneService';
 // The official, signed PawnIO installer, pinned to the exact file checked when this was written.
 const PAWNIO_SETUP = {
@@ -776,16 +776,31 @@ $result = @{ cpuLoad = [math]::Round($load); ramTotalGB = [math]::Round($os.Tota
   topCpu = @($byName | Sort-Object { $_.cpu } -Descending | Select-Object -First 6); topRam = @($byName | Sort-Object { $_.ramMB } -Descending | Select-Object -First 6)
   gpuTemps = $gpuTemps; cpuTempC = $null; liquidTempC = $null }`);
 
+// The CPU readings from the service's answer: temperature, and (service 4 and later) package power,
+// core voltage and the fastest core's clock.
+const liveCpu = (s) => {
+  const d = s && s.ok ? s.data : {};
+  return {
+    cpuTempC: d.cpuTempC ?? null,
+    cpuPowerW: d.cpuPowerW ?? null,
+    cpuVoltageV: d.cpuVoltageV ?? null,
+    cpuClockMHz: d.cpuClockMHz ?? null,
+    cpuNote: !s ? 'no service' : s.ok ? d.cpuNote : s.error,
+  };
+};
+
+// Only the service's sensors: quick enough to refresh every couple of seconds while a page shows them.
+async function sensors() {
+  return { ok: true, data: liveCpu(await serviceCall({ op: 'sensors' }, { timeoutMs: 5000 })) };
+}
+
 // Hardware sensors come from the background service (LibreHardwareMonitor); load, memory and the
 // GPU temperature Windows itself reports work without it.
 async function performance() {
   const [r, s] = await Promise.all([perfPS(), serviceCall({ op: 'sensors' }, { timeoutMs: 8000 })]);
   if (!r.ok) return r;
   const d = s && s.ok ? s.data : {};
-  Object.assign(r.data, {
-    cpuTempC: d.cpuTempC ?? null,
-    cpuNote: !s ? 'no service' : s.ok ? d.cpuNote : s.error,
-  });
+  Object.assign(r.data, liveCpu(s));
   // The service also knows the GPU hot spot; keep Windows' reading when the service isn't there.
   if ([].concat(d.gpus || []).length) r.data.gpuTemps = [].concat(d.gpus).map((g, i) => ({ ...g, fanRpm: r.data.gpuTemps?.[i]?.fanRpm ?? null }));
   return r;
@@ -835,19 +850,112 @@ $hags = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDr
 $cpu = (Get-CimInstance Win32_Processor | Select-Object -First 1).Name
 $bios = Get-CimInstance Win32_BIOS; $bb = Get-CimInstance Win32_BaseBoard
 $freeGB = [math]::Round((Get-PSDrive C).Free / 1GB); $sizeGB = [math]::Round(((Get-PSDrive C).Used + (Get-PSDrive C).Free) / 1GB)
-# Plain data only; the app words it in the user's language and judges the power plan (powerAdvice).
+# Memory sticks as the board describes them (slot names, rated and current speed, part number).
+$mods = @(Get-CimInstance Win32_PhysicalMemory | ForEach-Object { @{ locator = [string]$_.DeviceLocator; bank = [string]$_.BankLabel; speed = [int]$_.Speed; configured = [int]$_.ConfiguredClockSpeed; part = ([string]$_.PartNumber).Trim(); type = [int]$_.SMBIOSMemoryType; gb = [math]::Round($_.Capacity / 1GB) } })
+$slots = [int](Get-CimInstance Win32_PhysicalMemoryArray | Measure-Object MemoryDevices -Sum).Sum
+# The microcode Windows loaded (Intel's fixes arrive in it); 4 or 8 bytes depending on the system.
+$ucode = $null
+try { $u = (Get-ItemProperty 'HKLM:\\HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0').'Update Revision'; if ($u) { $ucode = if ($u.Length -ge 8) { [BitConverter]::ToUInt32($u, 4) } else { [BitConverter]::ToUInt32($u, 0) } } } catch {}
+$ssd = [bool](Get-PhysicalDisk -ErrorAction SilentlyContinue | Where-Object { $_.MediaType -eq 'SSD' })
+$trim = $null
+$tq = (fsutil behavior query DisableDeleteNotify 2>$null) | Out-String
+$tm = [regex]::Match($tq, 'NTFS DisableDeleteNotify\\s*=\\s*(\\d)'); if ($tm.Success) { $trim = ($tm.Groups[1].Value -eq '0') }
+# Plain data only; the app words it in the user's language and judges it (advise).
 $result = @(
   @{ key = 'power'; value = $plan; guid = $planGuid; cpu = $cpu; laptop = $laptop }
+  @{ key = 'microcode'; cpu = $cpu; rev = $ucode; laptop = $laptop }
   @{ key = 'gamemode'; on = ($gm -ne 0); ok = ($gm -ne 0); action = $(if ($gm -eq 0) { 'gamemode' } else { $null }) }
   @{ key = 'hags'; on = ($hags -eq 2); ok = ($hags -eq 2); action = $(if ($hags -eq 2) { $null } else { 'hags' }) }
   @{ key = 'disk'; freeGB = $freeGB; sizeGB = $sizeGB; ok = ($freeGB -gt 0.1 * $sizeGB); action = $null }
+  @{ key = 'trim'; ssd = $ssd; on = $trim }
+  @{ key = 'memory'; modules = $mods; slots = $slots; cpu = $cpu; laptop = $laptop; boardMaker = [string]$bb.Manufacturer; boardModel = [string]$bb.Product }
   @{ key = 'bios'; version = $bios.SMBIOSBIOSVersion; date = $bios.ReleaseDate.ToString('yyyy-MM-dd'); ok = $null
      intel1314 = ($cpu -match 'i[579]-1[34]\\d{3}')
      action = 'biosPage'; link = "https://www.google.com/search?q=$([uri]::EscapeDataString("$($bb.Manufacturer) $($bb.Product) BIOS"))" }
 )`);
-  if (r.ok) r.data = [].concat(r.data || []).map((x) => (x.key === 'power' ? powerAdvice(x) : x));
+  if (r.ok) r.data = advise([].concat(r.data || []));
   return r;
 };
+
+// ---- judging the raw data ----
+
+// 13th–14th gen Intel desktop chips (65 W and up) and the voltage fix Intel ships in microcode:
+// 0x12B is the fix itself, later revisions refine it. Laptop chips (H/HX/U/P) are not affected.
+const INTEL_1314_DESKTOP = /i[579]-1[34]\d{3}(KS|KF|K|F|T)?(?![A-Z0-9])/i;
+const MICROCODE_FIX = 0x12B;
+
+// Which memory channel a stick sits in, from the slot names the board reports: "Controller0-DIMM1"
+// (Intel: one controller per channel), "ChannelA-DIMM0", "P0 CHANNEL A" (AMD), "DIMM_B2", "A1".
+function memChannel(m) {
+  const s = `${m.locator} ${m.bank}`;
+  const ctrl = (s.match(/controller\s*(\d+)/i) || [])[1];
+  const ch = (s.match(/channel\s*([a-h])\b/i) || m.locator.match(/DIMM[\s_-]*([a-h])\d/i) || m.locator.match(/^([a-h])\d\b/i) || [])[1];
+  if (ctrl == null && ch == null) return null;
+  return `${ctrl ?? ''}${(ch || '').toUpperCase()}`;
+}
+
+// The speed a kit is sold at, from its part number (G.Skill F5-6000…, Corsair …M2B6000C36,
+// Kingston KF560C36…, Crucial …16G60C38…, TeamGroup …16G6000HC38…), when it can be read.
+const MEM_SPEEDS = [2133, 2400, 2666, 2933, 3000, 3200, 3466, 3600, 3733, 3866, 4000, 4133, 4266, 4400, 4800, 5200, 5600, 6000, 6200, 6400, 6600, 6800, 7000, 7200, 7600, 8000, 8200, 8400];
+function ratedFromPart(part = '') {
+  const p = part.toUpperCase();
+  const tries = [
+    p.match(/^F[345]-(\d{4})/), p.match(/M\dB(\d{4})C/), p.match(/G(\d{4})HC/),
+  ].filter(Boolean).map((m) => +m[1]);
+  const kf = p.match(/^KF([345])(\d{2})C/); if (kf) tries.push(+kf[2] * 100);
+  const cr = p.match(/\d+G(\d{2})C\d{2}/); if (cr) tries.push(+cr[1] * 100);
+  return tries.map((v) => (v === 2660 ? 2666 : v === 2930 ? 2933 : v)).find((v) => MEM_SPEEDS.includes(v)) || null;
+}
+
+function memoryAdvice(x) {
+  const mods = [].concat(x.modules || []).filter((m) => m && m.gb > 0);
+  if (!mods.length) return [];
+  const amd = /AMD|Ryzen/i.test(x.cpu || '');
+  const base = { group: 'memory', boardMaker: x.boardMaker, boardModel: x.boardModel, profile: amd ? 'EXPO' : 'XMP' };
+  // Channels: two sticks in the same channel run at half the memory speed of two channels.
+  const keys = mods.map(memChannel);
+  const channels = keys.every((k) => k != null) ? new Set(keys).size : null;
+  const chan = {
+    ...base, key: 'memChannels', sticks: mods.length, channels, slots: x.slots, laptop: x.laptop,
+    ok: channels == null ? null : channels >= 2 ? true : x.laptop && mods.length === 1 ? null : false,
+    guide: channels === 1 && mods.length > 1 ? 'channels' : null,
+  };
+  // Speed: running below what the kit is sold at means its XMP/EXPO profile is off.
+  const configured = Math.min(...mods.map((m) => m.configured || m.speed || 0));
+  const rated = Math.max(...mods.map((m) => Math.max(ratedFromPart(m.part) || 0, m.speed || 0)));
+  const ddr = mods[0].type === 34 ? 5 : mods[0].type === 26 ? 4 : null;
+  const speed = {
+    ...base, key: 'memSpeed', configured, rated, ddr,
+    ok: !configured || !rated ? null : configured >= rated * 0.97,
+    guide: rated && configured && configured < rated * 0.97 ? 'xmp' : null,
+  };
+  return x.laptop ? [chan] : [chan, speed];
+}
+
+function advise(list) {
+  const out = [];
+  for (const x of list) {
+    if (x.key === 'power') {
+      const p = powerAdvice(x);
+      out.push({ ...p, group: 'cpu' });
+      // Desktop CPUs that boost to 150 W and more: lowering the power limit in the BIOS is the
+      // most effective way to run cooler. A tip, judged on the page from the live readings.
+      if (!x.laptop && ['intelHybrid', 'amd', 'amdX3D'].includes(p.cpuKind)) out.push({ key: 'powerLimit', group: 'cpu', cpuKind: p.cpuKind, intel1314: INTEL_1314_DESKTOP.test(x.cpu || ''), ok: null, guide: 'powerLimit' });
+    } else if (x.key === 'microcode') {
+      if (x.laptop || !INTEL_1314_DESKTOP.test(x.cpu || '') || x.rev == null) continue;
+      out.push({ key: 'microcode', group: 'cpu', rev: x.rev, hex: `0x${Number(x.rev).toString(16).toUpperCase()}`, ok: x.rev >= MICROCODE_FIX, action: null });
+    } else if (x.key === 'memory') {
+      out.push(...memoryAdvice(x));
+    } else if (x.key === 'trim') {
+      if (!x.ssd || x.on == null) continue;
+      out.push({ ...x, group: 'storage', ok: !!x.on, action: null });
+    } else {
+      const group = { gamemode: 'windows', hags: 'gpu', disk: 'storage', bios: 'board' }[x.key] || 'windows';
+      out.push({ ...x, group });
+    }
+  }
+  return out;
+}
 
 const applyRecommendation = (key) => {
   const scripts = {
@@ -871,7 +979,8 @@ function openSystemRestore() {
 module.exports = {
   scanHardware, driverUpdates, gpuVendorCheck, downloadGpuInstaller, installDrivers, enableDevice,
   biosCheck, downloadBios,
-  junkScan, junkClean, startupList, startupToggle, performance, recommendations, applyRecommendation,
+  junkScan, junkClean, startupList, startupToggle, performance, sensors, recommendations, applyRecommendation,
+  memChannel, ratedFromPart, advise,
   createRestorePoint, openSystemRestore, adminStatus, adminStart, adminStop,
   serviceStatus, installService, uninstallService, serviceOpsScript, SERVICE_VERSION,
 };

@@ -45,7 +45,7 @@ namespace Tune
 
     public class TuneService : ServiceBase
     {
-        public const string Version = "3";
+        public const string Version = "4";
         // Another name only for testing a new build next to the installed service (--console --pipe X).
         static string PipeName = "TuneService";
         const int MaxRequest = 64 * 1024;
@@ -271,6 +271,32 @@ namespace Tune
 
         static object Round(float v) { return Math.Round(v, 0); }
 
+        static ISensor Find(IHardware h, SensorType type, Func<ISensor, bool> match)
+        {
+            foreach (var s in h.Sensors)
+                if (s.SensorType == type && s.Value.HasValue && match(s)) return s;
+            return null;
+        }
+
+        // Power, voltage and clock of the CPU, read only. Intel: "CPU Package" power and the "CPU Core"
+        // voltage the processor reports; AMD: "Package" power and the SVI2/SVI3 core voltage. The clock
+        // is the fastest core right now.
+        static void CpuLive(IHardware h, Dictionary<string, object> r)
+        {
+            var power = Find(h, SensorType.Power, s => s.Name.Contains("Package"));
+            if (power != null && power.Value.Value > 0 && power.Value.Value < 1000) r["cpuPowerW"] = Round(power.Value.Value);
+            var volt = Find(h, SensorType.Voltage, s => s.Name == "CPU Core")
+                ?? Find(h, SensorType.Voltage, s => s.Name.Contains("SVI") && s.Name.StartsWith("Core"));
+            if (volt == null)
+                foreach (var s in h.Sensors)
+                    if (s.SensorType == SensorType.Voltage && s.Value.HasValue && s.Name.Contains("VID") && (volt == null || s.Value.Value > volt.Value.Value)) volt = s;
+            if (volt != null && volt.Value.Value > 0.3 && volt.Value.Value < 2.0) r["cpuVoltageV"] = Math.Round(volt.Value.Value, 3);
+            float clock = 0;
+            foreach (var s in h.Sensors)
+                if (s.SensorType == SensorType.Clock && s.Value.HasValue && s.Name.Contains("Core") && s.Value.Value > clock && s.Value.Value < 10000) clock = s.Value.Value;
+            if (clock > 0) r["cpuClockMHz"] = Round(clock);
+        }
+
         Dictionary<string, object> Sensors()
         {
             var r = new Dictionary<string, object> { { "pawnio", PawnIoVersion() } };
@@ -289,6 +315,7 @@ namespace Tune
                             ?? temps.OrderByDescending(s => s.Value.Value).First();
                         r["cpuTempC"] = Round(pick.Value.Value);
                         r["cpuName"] = h.Name;
+                        CpuLive(h, r);
                     }
                     if (h.HardwareType == HardwareType.GpuNvidia || h.HardwareType == HardwareType.GpuAmd || h.HardwareType == HardwareType.GpuIntel)
                     {

@@ -470,3 +470,26 @@ html[dir=ltr] .path-text { text-align: left; }
 
 /* What happens if a recommendation is left as it is. */
 .dmeta.if-not { white-space: normal; color: #b45309; margin-top: 2px; }
+
+/* Performance center: live CPU tiles, checks grouped by part of the PC, and the score. */
+.stats.live.n4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.stats.live.n5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.stats.live .stat b { font-variant-numeric: tabular-nums; }
+.stats.live .stat b .spin { vertical-align: -2px; color: var(--muted); }
+.live-hint { margin-top: -4px; }
+.live-hint .link-btn { font-size: 12.5px; }
+.group-title {
+  position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 7px;
+  padding: 8px 14px; background: #f7f8fa; border-bottom: 1px solid var(--border);
+  font-size: 12.5px; font-weight: 600; color: #3b3e4c;
+}
+.group-title .warn-text { margin-inline-start: auto; font-weight: 500; font-size: 12px; }
+.dicon.good { background: var(--accent-soft); color: var(--accent); }
+.score {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 99px;
+  background: #fef3c7; color: #92400e; font-size: 13px; white-space: nowrap;
+}
+.score b { font-size: 15px; font-variant-numeric: tabular-nums; }
+.score.all { background: var(--accent-soft); color: var(--accent); }
+.header-actions { align-items: center; }
+.acts .note { font-size: 12px; color: var(--muted); }

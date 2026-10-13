@@ -105,6 +105,7 @@ ipcMain.handle('startup:toggle', async (_e, item, enable) => {
   return r;
 });
 ipcMain.handle('perf:get', () => sys.performance());
+ipcMain.handle('perf:sensors', () => sys.sensors());
 ipcMain.handle('rec:list', () => sys.recommendations());
 ipcMain.handle('rec:apply', async (_e, rec) => {
   const r = await sys.applyRecommendation(rec.key);

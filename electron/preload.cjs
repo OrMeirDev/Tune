@@ -32,6 +32,7 @@ contextBridge.exposeInMainWorld('tune', {
   startupList: call('startup:list'),
   startupToggle: call('startup:toggle'),
   performance: call('perf:get'),
+  sensors: call('perf:sensors'),
   recommendations: call('rec:list'),
   applyRecommendation: call('rec:apply'),
   createRestorePoint: call('restore:create'),

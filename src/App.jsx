@@ -3,7 +3,7 @@ import {
   SlidersHorizontal, RefreshCw, Cpu, Sparkles, Trash2, Rocket, Thermometer, Settings2, History, Settings, Home,
   ChevronLeft, ChevronRight, Download, Monitor, Wifi, Bluetooth, Network, Volume2, HardDrive, Usb, Camera, AlertTriangle, Check,
   Loader2, ShieldCheck, ExternalLink, Search, Undo2, RotateCcw, FolderOpen, FileSpreadsheet, FileText,
-  CircuitBoard, ScanSearch, Info, X, Globe,
+  CircuitBoard, ScanSearch, Info, X, Globe, MemoryStick, Gauge, Zap, Activity, BookOpen,
 } from 'lucide-react';
 import { LangContext, makeT, useT } from './i18n.js';
 
@@ -355,20 +355,34 @@ const recValue = (r, t) => ({
   hags: t(r.on ? 'on' : 'off'),
   disk: t('rec.disk.value', { free: r.freeGB, size: r.sizeGB }),
   bios: `${r.version} (${r.date})`,
+  microcode: r.hex,
+  powerLimit: r.powerW != null ? t('rec.powerLimit.value', { w: r.powerW, t: r.tempC ?? '—' }) : '',
+  memChannels: r.channels == null ? t('rec.memChannels.unknown') : t(r.channels >= 2 ? 'rec.memChannels.dual' : r.sticks > 1 ? 'rec.memChannels.sameOne' : 'rec.memChannels.one', { n: r.sticks }),
+  memSpeed: r.rated ? t('rec.memSpeed.value', { now: r.configured, rated: r.rated }) : `${r.configured} MT/s`,
+  trim: t(r.on ? 'on' : 'off'),
+  gpuDriver: t(r.ok ? 'rec.gpuDriver.latest' : 'rec.gpuDriver.newer', { v: r.latest }),
+  junk: fmtGB(r.bytes),
+  startup: t('rec.startup.value', { n: r.n }),
 }[r.key] ?? '');
 // A short "why" for every recommendation...
 const recNote = (r, t) => (r.key === 'bios' ? t(r.intel1314 ? 'rec.bios.note1314' : 'rec.bios.note')
-  : r.key === 'power' ? t(`rec.power.why.${r.cpuKind || 'other'}`) : t(`rec.${r.key}.note`));
+  : r.key === 'power' ? t(`rec.power.why.${r.cpuKind || 'other'}`)
+    : r.key === 'powerLimit' ? t(r.cpuKind === 'intelHybrid' ? 'rec.powerLimit.noteIntel' : 'rec.powerLimit.noteAmd')
+      : r.key === 'memSpeed' ? t('rec.memSpeed.note', { profile: r.profile })
+        : r.key === 'memChannels' && r.sticks === 1 ? t('rec.memChannels.noteOne') : t(`rec.${r.key}.note`));
 // ...and, when it isn't met, what happens if it stays that way.
 function recIf(r, t) {
   if (r.key === 'bios') return t(r.intel1314 ? 'rec.bios.if1314' : 'rec.bios.if');
+  if (r.key === 'powerLimit') return t('rec.powerLimit.if', { t: r.tempC });
+  if (r.key === 'memChannels' && r.sticks === 1) return t('rec.memChannels.ifOne');
+  if (r.key === 'memSpeed') return t('rec.memSpeed.if', { now: r.configured, rated: r.rated, profile: r.profile });
   if (r.key !== 'power') return t(`rec.${r.key}.if`);
   if (r.plan === 'saver') return t('rec.power.if.saver');
   if (r.plan === 'custom') return t('rec.power.if.custom');
   return t('rec.power.if.fast') + (r.cpuKind === 'intelHybrid' ? t('rec.power.if.hybrid') : r.cpuKind === 'amdX3D' ? t('rec.power.if.x3d') : '');
 }
 
-function OverviewPage({ junk, startup, perf, recs, go }) {
+function OverviewPage({ junk, startup, perf, live, recs, go }) {
   const t = useT();
   const junkTotal = (junk || []).reduce((s, c) => s + c.bytes, 0);
   const startOn = (startup || []).filter((s) => s.enabled).length;
@@ -391,6 +405,9 @@ function OverviewPage({ junk, startup, perf, recs, go }) {
           <div className="ohead"><span><Thermometer size={16} /> {t('ov.perf')}</span></div>
           {perf ? (<>
             <div className="orow"><span>{t('ov.cpuLoad')}</span><span>{perf.cpuLoad}%</span></div>
+            {(live?.cpuTempC ?? perf.cpuTempC) != null && (
+              <div className="orow"><span>{t('lv.temp')}</span><span className={tempClass(live?.cpuTempC ?? perf.cpuTempC)}>{ltr(`${live?.cpuTempC ?? perf.cpuTempC}°C${live?.cpuPowerW != null ? ` · ${live.cpuPowerW} W` : ''}`)}</span></div>
+            )}
             <div className="orow"><span>{t('ov.ramUsed')}</span><span>{ltr(`${(perf.ramTotalGB - perf.ramFreeGB).toFixed(1)} / ${perf.ramTotalGB} GB`)}</span></div>
             {[].concat(perf.gpuTemps || []).slice(0, 1).map((g) => <div key={g.name} className="orow"><span>{t('ov.gpuTemp')}</span><span className={tempClass(g.tempC)}>{ltr(`${g.tempC}°C`)}</span></div>)}
             <div className="orow"><span>{t('ov.topRam')}</span><span className="note">{[].concat(perf.topRam).slice(0, 2).map((p) => p.name).join(', ')}</span></div>
@@ -398,9 +415,9 @@ function OverviewPage({ junk, startup, perf, recs, go }) {
           <div className="ofoot"><span /><button className="btn-ghost" onClick={() => go('perf')}>{t('ov.details')}</button></div>
         </div>
         <div className="ocard">
-          <div className="ohead"><span><Settings2 size={16} /> {t('ov.recs')}</span><span className="muted">{recs ? (toImprove ? t('ov.toImprove', { n: toImprove }) : t('ov.allOk')) : '…'}</span></div>
-          {(recs || []).slice(0, 4).map((r) => (
-            <div key={r.key} className="orow"><span>{recTitle(r, t)}</span>{r.ok === true ? <span className="ok-text">{t('ok')}</span> : r.ok === false ? <span className="warn-text">{t('improve')}</span> : <span className="note">{t('toCheck')}</span>}</div>
+          <div className="ohead"><span><Settings2 size={16} /> {t('ov.recs')}</span><span className="muted">{recs ? (toImprove ? (toImprove === 1 ? t('ov.oneToImprove') : t('ov.toImprove', { n: toImprove })) : t('ov.allOk')) : '…'}</span></div>
+          {[...(recs || [])].sort((a, b) => statusRank(a.ok) - statusRank(b.ok)).slice(0, 4).map((r) => (
+            <div key={r.key} className="orow"><span>{recTitle(r, t)}</span>{r.ok === true ? <span className="ok-text">{t('ok')}</span> : r.ok === false ? <span className="warn-text">{t('improve')}</span> : <span className="note">{t(r.guide ? 'cc.tip' : 'toCheck')}</span>}</div>
           ))}
           <div className="ofoot"><span /><button className="btn-ghost" onClick={() => go('recs')}>{t('ov.allRecs')}</button></div>
         </div>
@@ -496,10 +513,19 @@ function coolingFindings(p, t) {
   return [{ level: 'ok', text: t('fd.ok') }];
 }
 
-function PerfPage({ perf, onRefresh, onInstallService, busy }) {
+function PerfPage({ perf, live, service, onRefresh, onInstallService, busy }) {
   const t = useT();
   const findings = perf ? coolingFindings(perf, t) : [];
   const gpu = [].concat(perf?.gpuTemps || [])[0];
+  const gpuTile = (
+    <div key="gpu" className="stat" title={gpu?.name || ''}>
+      <span><Monitor size={13} /> {t('pf.gpuTemp')}</span>
+      {gpu ? (<>
+        <b className={tempClass(gpu.tempC)}>{ltr(`${gpu.tempC}°C`)}</b>
+        <small>{[gpu.hotspotC ? t('pf.hotspot', { t: ltr(`${gpu.hotspotC}°C`) }) : null, gpu.fanRpm ? t('pf.fan', { rpm: rpm(gpu.fanRpm, t) }) : null].filter(Boolean).join(' · ') || gpu.name}</small>
+      </>) : <><b className="na">—</b><small>{t('pf.gpuNone')}</small></>}
+    </div>
+  );
   return (
     <>
       <header className="page-header">
@@ -512,22 +538,8 @@ function PerfPage({ perf, onRefresh, onInstallService, busy }) {
           <div className="stat"><span>{t('pf.ramUsed')}</span><b>{ltr(`${(perf.ramTotalGB - perf.ramFreeGB).toFixed(1)} GB`)}</b></div>
           <div className="stat"><span>{t('pf.ramFree')}</span><b>{ltr(`${perf.ramFreeGB} GB`)}</b></div>
         </div>
-        <div className="stats two">
-          <div className="stat" title={t('pf.cpuTempTitle')}>
-            <span><Cpu size={13} /> {t('pf.cpuTemp')}</span>
-            {perf.cpuTempC == null ? (<>
-              <b className="na">—</b>
-              <small>{t(cpuNoteKey(perf.cpuNote))}{perf.cpuNote === 'no service' && <> · <button className="link-btn" onClick={onInstallService} disabled={!!busy}>{t('pf.install')}</button></>}</small>
-            </>) : <b className={tempClass(perf.cpuTempC)}>{ltr(`${perf.cpuTempC}°C`)}</b>}
-          </div>
-          <div className="stat" title={gpu?.name || ''}>
-            <span><Monitor size={13} /> {t('pf.gpuTemp')}</span>
-            {gpu ? (<>
-              <b className={tempClass(gpu.tempC)}>{ltr(`${gpu.tempC}°C`)}</b>
-              <small>{[gpu.hotspotC ? t('pf.hotspot', { t: ltr(`${gpu.hotspotC}°C`) }) : null, gpu.fanRpm ? t('pf.fan', { rpm: rpm(gpu.fanRpm, t) }) : null].filter(Boolean).join(' · ') || gpu.name}</small>
-            </>) : <><b className="na">—</b><small>{t('pf.gpuNone')}</small></>}
-          </div>
-        </div>
+        <LiveCpu live={live || perf} service={service} onInstallService={onInstallService} busy={busy} extra={[gpuTile]} />
+        {perf.cpuTempC == null && perf.cpuNote && perf.cpuNote !== 'no service' && <div className="dmeta">{t(cpuNoteKey(perf.cpuNote))}</div>}
         {findings.map((f) => (
           <div key={f.text} className={`finding ${f.level}`}>
             {f.level === 'ok' ? <Check size={15} /> : <AlertTriangle size={15} />}
@@ -545,43 +557,197 @@ function PerfPage({ perf, onRefresh, onInstallService, busy }) {
   );
 }
 
-function RecsPage({ recs, bios, onApply, onBiosDownload, onGuide, busy, prog }) {
+// ---------------- performance center ----------------
+
+// Live CPU readings from the background service, every 2 seconds while a page shows them.
+function useLiveSensors(on) {
+  const [live, setLive] = useState(null);
+  useEffect(() => {
+    if (!on || !api?.sensors) return undefined;
+    let stop = false;
+    let timer;
+    const tick = async () => {
+      const r = await api.sensors().catch(() => null);
+      if (stop) return;
+      if (r?.ok) setLive(r.data);
+      timer = setTimeout(tick, 2000);
+    };
+    tick();
+    return () => { stop = true; clearTimeout(timer); };
+  }, [on]);
+  return live;
+}
+
+// Temperature, power, voltage and clock of the CPU as tiles; `extra` adds tiles after them.
+// Without the service (or with an older one) it says what to do to see them.
+function LiveCpu({ live, service, onInstallService, busy, extra = [] }) {
   const t = useT();
+  const v = live || {};
+  const tiles = [
+    { key: 'temp', icon: Thermometer, label: t('lv.temp'), value: v.cpuTempC != null ? `${v.cpuTempC}°C` : null, cls: tempClass(v.cpuTempC) },
+    { key: 'power', icon: Zap, label: t('lv.power'), value: v.cpuPowerW != null ? `${v.cpuPowerW} W` : null, title: t('lv.powerTitle') },
+    { key: 'volt', icon: Activity, label: t('lv.volt'), value: v.cpuVoltageV != null ? `${Number(v.cpuVoltageV).toFixed(3)} V` : null, title: t('lv.voltTitle') },
+    { key: 'clock', icon: Gauge, label: t('lv.clock'), value: v.cpuClockMHz != null ? `${(v.cpuClockMHz / 1000).toFixed(2)} GHz` : null },
+  ];
+  const noService = live && v.cpuNote === 'no service';
+  const outdated = service?.running && !service.current;
+  const hint = noService ? t('lv.noService') : outdated ? t('lv.outdated') : null;
   return (
     <>
-      <header className="page-header"><div><h1>{t('rc.title')}</h1><p className="subtitle">{t('rc.subtitle')}</p></div></header>
+      <div className={`stats live n${tiles.length + extra.length}`}>
+        {tiles.map((x) => (
+          <div key={x.key} className="stat" title={x.title || ''}>
+            <span><x.icon size={13} /> {x.label}</span>
+            {x.value != null ? <b className={x.cls || ''}>{ltr(x.value)}</b> : <b className="na">{live ? '—' : <Loader2 size={15} className="spin" />}</b>}
+          </div>
+        ))}
+        {extra}
+      </div>
+      {hint && (
+        <div className="finding warn live-hint">
+          <Info size={15} />
+          <div>{hint} <button className="link-btn" onClick={onInstallService} disabled={!!busy}>{t(noService ? 'lv.install' : 'lv.update')}</button></div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// Every check, grouped by the part of the PC it is about. Tune's own scans (graphics driver,
+// leftover files, startup apps) join the settings checks, so everything is in one place.
+const GROUPS = [
+  { id: 'cpu', icon: Cpu }, { id: 'board', icon: CircuitBoard }, { id: 'memory', icon: MemoryStick },
+  { id: 'gpu', icon: Monitor }, { id: 'storage', icon: HardDrive }, { id: 'windows', icon: Settings2 },
+];
+function centerItems({ recs, bios, gpu, junk, startup, live }) {
+  const items = (recs || []).map((r) => {
+    // BIOS: checked against the maker's site, so its status comes from the BIOS check.
+    if (r.key === 'bios') return { ...r, ok: bios?.supported ? !bios.newer : null };
+    // The power-limit tip turns into a finding when the CPU is very hot right now.
+    if (r.key === 'powerLimit') return { ...r, ok: live?.cpuTempC >= 90 ? false : null, tempC: live?.cpuTempC, powerW: live?.cpuPowerW };
+    return r;
+  });
+  const drivers = (gpu || []).filter((g) => g.vendor !== 'Intel' && g.latest);
+  if (drivers.length) {
+    const g = drivers.find((x) => x.newer && x.url) || drivers[0];
+    items.push({ key: 'gpuDriver', group: 'gpu', ok: !(g.newer && g.url), latest: g.latest, vendor: g.vendor, go: 'updates' });
+  }
+  if (junk) {
+    const bytes = junk.reduce((s, c) => s + c.bytes, 0);
+    items.push({ key: 'junk', group: 'storage', bytes, ok: bytes < 5e9, go: 'clean' });
+  }
+  if (startup) {
+    const n = startup.filter((s) => s.enabled).length;
+    items.push({ key: 'startup', group: 'windows', n, ok: n <= 12, go: 'startup' });
+  }
+  return items;
+}
+const statusRank = (ok) => (ok === false ? 0 : ok == null ? 1 : 2);
+
+function CenterRow({ r, bios, onApply, onBiosDownload, onBiosGuide, onGuide, go, busy, prog }) {
+  const t = useT();
+  const isBios = r.key === 'bios';
+  const note = isBios && bios?.supported
+    ? (bios.newer ? `${t('rc.biosNewer', { v: bios.latest.version, maker: bios.maker, date: bios.latest.date })} ${recNote(r, t)}` : t('rc.biosLatest', { maker: bios.maker }))
+    : recNote(r, t);
+  const value = String(recValue(r, t) ?? '');
+  const tip = r.ok == null && !isBios;
+  return (
+    <div className="drow">
+      <span className={`dicon ${r.ok === false ? 'warn' : r.ok === true ? 'good' : ''}`}>{r.ok === false ? <AlertTriangle size={16} /> : r.ok === true ? <Check size={16} /> : <Info size={16} />}</span>
+      <div style={{ minWidth: 0 }}>
+        <div className="dname">{recTitle(r, t)}{value && <> · <span style={{ fontWeight: 400 }}>{/^0x/.test(value) ? ltr(value) : value.replace(/\(?\d[\d.,:/-]*\)?(?:\s?(?:GB|MB|W|V|GHz|MT\/s))?/g, (m) => ltr(m))}</span></>}</div>
+        <div className="dmeta" style={{ whiteSpace: 'normal' }}>{note}</div>
+        {r.ok === false && <div className="dmeta if-not">{recIf(r, t)}</div>}
+      </div>
+      <div className="acts">
+        {r.ok === true && <span className="ok-text">{t('ok')}</span>}
+        {tip && <span className="note">{t('cc.tip')}</span>}
+        {r.guide && <button className={r.ok === false ? 'btn-primary' : 'btn-ghost'} onClick={() => onGuide(r)}><BookOpen size={14} /> {t('cc.how')}</button>}
+        {r.go && r.ok === false && <button className="btn-primary" onClick={() => go(r.go)}>{t(`cc.go.${r.go}`)}</button>}
+        {r.go && r.ok !== false && <button className="btn-ghost" onClick={() => go(r.go)}>{t('cc.open')}</button>}
+        {r.key === 'microcode' && r.ok === false && <button className="btn-primary" onClick={onBiosGuide}>{t('cc.toBios')}</button>}
+        {isBios && bios?.supported && bios.newer && (busy === 'bios' ? <ProgressPill p={prog.bios} fallback={t('prog.downloading')} /> : (<>
+          <button className="btn-ghost" onClick={onBiosGuide}><Info size={14} /> {t('up.howInstall')}</button>
+          <button className="btn-primary" disabled={!!busy} onClick={onBiosDownload}><Download size={14} /> {t('rc.download')}</button>
+        </>))}
+        {isBios && !bios && <Loader2 size={15} className="spin" />}
+        {isBios && bios && !bios.supported && <button className="btn-ghost" onClick={() => api.openLink(bios.page || r.link)}><ExternalLink size={14} /> {t('rc.searchMaker')}</button>}
+        {r.action && !isBios && (busy === r.key ? <ProgressPill p={prog[r.key]} fallback={t('prog.applying')} />
+          : <button className="btn-primary" disabled={!!busy} onClick={() => onApply(r)}>{t(r.key === 'power' ? 'rc.applyPlan' : 'rc.apply')}</button>)}
+      </div>
+    </div>
+  );
+}
+
+function CenterPage({ recs, bios, gpu, junk, startup, live, service, onInstallService, onRefresh, onGuide, onBiosGuide, go, ...rowProps }) {
+  const t = useT();
+  const items = useMemo(() => centerItems({ recs, bios, gpu, junk, startup, live }), [recs, bios, gpu, junk, startup, live]);
+  const judged = items.filter((i) => i.ok != null);
+  const good = judged.filter((i) => i.ok).length;
+  return (
+    <>
+      <header className="page-header">
+        <div><h1>{t('cc.title')}</h1><p className="subtitle">{t('cc.subtitle')}</p></div>
+        <div className="header-actions">
+          {recs && <div className={`score ${good === judged.length ? 'all' : ''}`} title={t('cc.scoreTitle')}><b>{ltr(`${good}/${judged.length}`)}</b> {t('cc.okCount')}</div>}
+          <button className="btn-ghost" onClick={onRefresh} disabled={!recs}><RefreshCw size={14} /> {t('pf.refresh')}</button>
+        </div>
+      </header>
+      <LiveCpu live={live} service={service} onInstallService={onInstallService} busy={rowProps.busy} />
       <section className="panel">
-        {(recs || []).map((r) => {
-          // BIOS: checked against the maker's site, so its status comes from the BIOS check.
-          const isBios = r.key === 'bios';
-          const ok = isBios ? (bios?.supported ? !bios.newer : null) : r.ok;
-          const note = isBios && bios?.supported
-            ? (bios.newer ? `${t('rc.biosNewer', { v: bios.latest.version, maker: bios.maker, date: bios.latest.date })} ${recNote(r, t)}` : t('rc.biosLatest', { maker: bios.maker }))
-            : recNote(r, t);
+        {!recs ? <div className="center-msg"><Loader2 size={16} className="spin" /> {t('loading')}</div> : GROUPS.map((g) => {
+          const list = items.filter((i) => i.group === g.id).sort((a, b) => statusRank(a.ok) - statusRank(b.ok));
+          if (!list.length) return null;
+          const bad = list.filter((i) => i.ok === false).length;
           return (
-            <div key={r.key} className="drow">
-              <span className={`dicon ${ok === false ? 'warn' : ''}`}>{ok === false ? <AlertTriangle size={16} /> : <Check size={16} />}</span>
-              <div style={{ minWidth: 0 }}>
-                <div className="dname">{recTitle(r, t)} · <span style={{ fontWeight: 400 }}>{String(recValue(r, t)).replace(/\(?\d[\d.,:/-]*\)?(?:\s?(?:GB|MB))?/g, (m) => ltr(m))}</span></div>
-                <div className="dmeta" style={{ whiteSpace: 'normal' }}>{note}</div>
-                {ok === false && <div className="dmeta if-not">{recIf(r, t)}</div>}
-              </div>
-              <div className="acts">
-                {ok === true && <span className="ok-text">{t('ok')}</span>}
-                {isBios && bios?.supported && bios.newer && (busy === 'bios' ? <ProgressPill p={prog.bios} fallback={t('prog.downloading')} /> : (<>
-                  <button className="btn-ghost" onClick={onGuide}><Info size={14} /> {t('up.howInstall')}</button>
-                  <button className="btn-primary" disabled={!!busy} onClick={onBiosDownload}><Download size={14} /> {t('rc.download')}</button>
-                </>))}
-                {isBios && !bios && <Loader2 size={15} className="spin" />}
-                {isBios && bios && !bios.supported && <button className="btn-ghost" onClick={() => api.openLink(bios.page || r.link)}><ExternalLink size={14} /> {t('rc.searchMaker')}</button>}
-                {r.action && !isBios && (busy === r.key ? <ProgressPill p={prog[r.key]} fallback={t('prog.applying')} />
-                  : <button className="btn-primary" disabled={!!busy} onClick={() => onApply(r)}>{t(r.key === 'power' ? 'rc.applyPlan' : 'rc.apply')}</button>)}
-              </div>
-            </div>
+            <React.Fragment key={g.id}>
+              <div className="group-title"><g.icon size={14} /> {t(`cc.g.${g.id}`)}{bad > 0 && <span className="warn-text">{bad === 1 ? t('ov.oneToImprove') : t('ov.toImprove', { n: bad })}</span>}</div>
+              {list.map((r) => <CenterRow key={r.key} r={r} bios={bios} go={go} onGuide={onGuide} onBiosGuide={onBiosGuide} {...rowProps} />)}
+            </React.Fragment>
           );
         })}
       </section>
     </>
+  );
+}
+
+// BIOS menus differ by board maker; these are the names each maker uses.
+const BIOS_HINTS = {
+  asus: { name: 'ASUS', key: 'Del', adv: 'F7', xmp: 'Ai Tweaker → Ai Overclock Tuner → {profile} I', power: 'Ai Tweaker' },
+  msi: { name: 'MSI', key: 'Del', adv: 'F7', xmp: 'OC → Extreme Memory Profile ({profile})', power: 'OC' },
+  gigabyte: { name: 'Gigabyte', key: 'Del', adv: 'F2', xmp: 'Tweaker → Extreme Memory Profile ({profile})', power: 'Tweaker' },
+  asrock: { name: 'ASRock', key: 'F2', adv: 'F6', xmp: 'OC Tweaker → DRAM Configuration → {profile}', power: 'OC Tweaker' },
+  other: { name: '', key: 'Del / F2', adv: 'F7', xmp: '{profile}', power: 'Advanced' },
+};
+const biosHint = (maker = '') => BIOS_HINTS[/asus/i.test(maker) ? 'asus' : /micro-star|msi/i.test(maker) ? 'msi' : /gigabyte/i.test(maker) ? 'gigabyte' : /asrock/i.test(maker) ? 'asrock' : 'other'];
+const GUIDE_STEPS = { channels: 5, xmp: 4, powerLimitIntel: 5, powerLimitAmd: 3 };
+
+// Step-by-step for the changes Tune can't make from Windows (inside the PC or in the BIOS).
+function SettingGuide({ item, boardMaker, onClose }) {
+  const t = useT();
+  const kind = item.guide === 'powerLimit' ? (item.cpuKind === 'intelHybrid' ? 'powerLimitIntel' : 'powerLimitAmd') : item.guide;
+  const h = biosHint(item.boardMaker || boardMaker);
+  const profile = item.profile || 'XMP';
+  const vars = { key: h.key, adv: h.adv, power: h.power, profile, option: h.xmp.replace('{profile}', profile), maker: h.name || t('g2.yourBoard') };
+  const manual = item.boardModel ? `https://www.google.com/search?q=${encodeURIComponent(`${item.boardMaker || ''} ${item.boardModel} manual`)}` : null;
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div className="modal guide" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <div><h2>{t(`g2.${kind}.title`, vars)}</h2><div className="dmeta" style={{ whiteSpace: 'normal' }}>{t(`g2.${kind}.why`, vars)}</div></div>
+          <button className="icon-btn ghost" onClick={onClose} aria-label={t('close')}><X size={16} /></button>
+        </div>
+        <div className="guide-body">
+          <ol>{Array.from({ length: GUIDE_STEPS[kind] }, (_, i) => <li key={i}>{rich(t(`g2.${kind}.${i + 1}`, vars))}</li>)}</ol>
+          <div className="warn-box"><AlertTriangle size={14} /> {t(`g2.${kind}.warn`, vars)}</div>
+        </div>
+        <div className="modal-actions">
+          <button className="btn-primary" onClick={onClose}>{t('g2.done')}</button>
+          {manual && kind === 'channels' && <button className="btn-ghost" onClick={() => api.openLink(manual)}><ExternalLink size={14} /> {t('g2.manual')}</button>}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -700,7 +866,9 @@ export default function App() {
   const [appUpdate, setAppUpdate] = useState(null);
   const [adminUntil, setAdminUntil] = useState(0);
   const [guide, setGuide] = useState(false);
+  const [settingGuide, setSettingGuide] = useState(null);
   const [settings, setSettings] = useState(null);
+  const live = useLiveSensors(page === 'perf' || page === 'recs' || page === 'overview');
   const [service, setService] = useState(null);
   // English until the saved choice is read; a first launch stays English.
   const t = useMemo(() => makeT(settings?.lang || 'en'), [settings?.lang]);
@@ -840,15 +1008,23 @@ export default function App() {
           <Banner msg={shownMsg} onClose={() => setMsg(null)} />
           {page === 'updates' && <UpdatesPage hw={hw} wu={wu} gpu={gpu} bios={bios} scan={scan} onScan={fullScan} onInstall={installDrivers} onGpu={gpuInstall} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} onEnable={enable} busy={busy} prog={prog} />}
           {page === 'hardware' && <HardwarePage hw={hw} onExport={exportHw} />}
-          {page === 'overview' && <OverviewPage junk={junk} startup={startup} perf={perf} recs={recs} go={setPage} />}
+          {page === 'overview' && <OverviewPage junk={junk} startup={startup} perf={perf} live={live} recs={recs && centerItems({ recs, bios, gpu, junk, startup, live })} go={setPage} />}
           {page === 'clean' && <CleanPage junk={junk} onRescan={loadJunk} onClean={clean} busy={busy} />}
           {page === 'startup' && <StartupPage startup={startup} onToggle={toggle} busy={busy} prog={prog} />}
-          {page === 'perf' && <PerfPage perf={perf} onRefresh={() => { setPerf(null); loadPerf(); }} onInstallService={installService} busy={busy} />}
-          {page === 'recs' && <RecsPage recs={recs} bios={bios} onApply={apply} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} busy={busy} prog={prog} />}
+          {page === 'perf' && <PerfPage perf={perf} live={live} service={service} onRefresh={() => { setPerf(null); loadPerf(); }} onInstallService={installService} busy={busy} />}
+          {page === 'recs' && (
+            <CenterPage
+              recs={recs} bios={bios} gpu={gpu} junk={junk} startup={startup} live={live} service={service} go={setPage}
+              onInstallService={installService} onRefresh={() => { setRecs(null); loadRecs(); }}
+              onApply={apply} onBiosDownload={biosDownload} onBiosGuide={() => (bios?.latest ? setGuide(true) : setPage('updates'))}
+              onGuide={setSettingGuide} busy={busy} prog={prog}
+            />
+          )}
           {page === 'history' && <HistoryPage busy={busy} onRestorePoint={restorePoint} />}
           {page === 'settings' && <SettingsPage version={version} status={appUpdate} settings={settings} onLang={setLang} service={service} onInstallService={installService} onRemoveService={removeService} busy={busy} prog={prog} onPickDir={async () => setSettings(await api.pickSaveDir())} onCheck={async () => { setAppUpdate({ state: 'checking' }); if (!(await api.checkAppUpdate())) setAppUpdate({ state: 'dev' }); }} />}
         </main>
         {guide && bios?.latest && <BiosGuide bios={bios} onClose={() => setGuide(false)} onDownload={biosDownload} busy={busy === 'bios'} prog={prog.bios} />}
+        {settingGuide && <SettingGuide item={settingGuide} boardMaker={hw?.boardMaker} onClose={() => setSettingGuide(null)} />}
       </div>
     </LangContext.Provider>
   );
