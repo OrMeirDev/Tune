@@ -178,7 +178,66 @@ function UpdateBanner({ status }) {
 
 // ---------------- driver updates ----------------
 
-function UpdatesPage({ hw, wu, gpu, bios, scan, onScan, onInstall, onGpu, onBiosDownload, onGuide, onEnable, busy, prog }) {
+// A short rising chime made on the spot (no sound file): three soft bell notes, C6 → E6 → G6, each a
+// sine with quieter overtones, a quick attack and a gentle fade; the last one rings a little longer.
+function playChime() {
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    const ctx = new Ctx();
+    ctx.resume();
+    const master = ctx.createGain();
+    master.gain.value = 0.16;
+    master.connect(ctx.destination);
+    [[1046.5, 0], [1318.5, 0.11], [1568, 0.22]].forEach(([freq, at], i) => {
+      const last = i === 2;
+      for (const [mult, vol] of [[1, 1], [2, 0.22], [3, 0.07]]) {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.value = freq * mult;
+        const t0 = ctx.currentTime + 0.02 + at;
+        gain.gain.setValueAtTime(0, t0);
+        gain.gain.linearRampToValueAtTime(vol * (last ? 1 : 0.75), t0 + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + (last ? 1.3 : 0.45));
+        osc.connect(gain);
+        gain.connect(master);
+        osc.start(t0);
+        osc.stop(t0 + 1.4);
+      }
+    });
+    setTimeout(() => ctx.close(), 2000);
+  } catch { /* no audio device: the animation is enough */ }
+}
+
+// "Everything is up to date": the ring draws itself, fills green, the check is written in one
+// stroke, then a pop, a ripple and a few sparks. The chime plays once per finished scan, timed to
+// the check (soundKey is the scan's time, or null for no sound).
+let lastChime = null;
+function AllGood({ soundKey }) {
+  const t = useT();
+  useEffect(() => {
+    if (!soundKey || soundKey === lastChime) return undefined;
+    lastChime = soundKey;
+    const timer = setTimeout(playChime, 700);
+    return () => clearTimeout(timer);
+  }, [soundKey]);
+  return (
+    <div className="all-good" role="status">
+      <div className="ag-stage">
+        <span className="ag-wave" />
+        <span className="ag-burst" aria-hidden="true">{Array.from({ length: 12 }, (_, i) => <i key={i} style={{ '--a': `${i * 30}deg`, '--d': `${(i % 3) * 50}ms` }} />)}</span>
+        <svg className="ag-mark" viewBox="0 0 120 120" aria-hidden="true">
+          <circle className="ag-ring" cx="60" cy="60" r="50" />
+          <path className="ag-check" d="M38 62 L53 77 L84 45" />
+        </svg>
+      </div>
+      <div className="ag-title">{t('up.allGoodTitle')}</div>
+      <div className="ag-sub">{t('up.allGood')}</div>
+    </div>
+  );
+}
+
+function UpdatesPage({ hw, wu, gpu, bios, scan, soundKey, onScan, onInstall, onGpu, onBiosDownload, onGuide, onEnable, busy, prog }) {
   const t = useT();
   const loading = !!scan.running;
   const devByHwid = useMemo(() => {
@@ -220,7 +279,7 @@ function UpdatesPage({ hw, wu, gpu, bios, scan, onScan, onInstall, onGpu, onBios
       </div>
       <section className="panel">
         <div className="panel-title">{t('up.available')} {loading && <Loader2 size={15} className="spin" />}</div>
-        {!loading && total === 0 && <div className="center-msg"><Check size={18} /> {t('up.allGood')}</div>}
+        {!loading && total === 0 && <AllGood soundKey={soundKey} />}
         {biosNewer && (
           <div className="drow">
             <span className="dicon"><CircuitBoard size={17} /></span>
@@ -808,7 +867,7 @@ function HistoryPage({ busy, onRestorePoint }) {
   );
 }
 
-function SettingsPage({ version, status, onCheck, settings, onPickDir, onLang, service, onInstallService, onRemoveService, busy, prog }) {
+function SettingsPage({ version, status, onCheck, settings, onPickDir, onLang, onSound, service, onInstallService, onRemoveService, busy, prog }) {
   const t = useT();
   const svcText = !service ? t('se.svc.checking')
     : service.running ? `${t('se.svc.running')}${service.current ? '' : t('se.svc.outdated')} · ${service.pawnio ? t('se.svc.pawnOk', { v: service.pawnio }) : t('se.svc.pawnMissing')}`
@@ -825,6 +884,13 @@ function SettingsPage({ version, status, onCheck, settings, onPickDir, onLang, s
           <div className="segmented">
             <button className={t.lang === 'en' ? 'on' : ''} onClick={() => onLang('en')}>English</button>
             <button className={t.lang === 'he' ? 'on' : ''} onClick={() => onLang('he')}>עברית</button>
+          </div>
+        </div>
+        <div className="setting">
+          <div><div className="setting-title">{t('se.sound')}</div><div className="row-meta">{t('se.soundNote')}</div></div>
+          <div className="acts">
+            <button className="btn-ghost" onClick={playChime}>{t('se.soundTry')}</button>
+            <button className={`toggle ${settings?.sound !== false ? 'on' : ''}`} aria-label={t('se.sound')} onClick={() => onSound(settings?.sound === false)} />
           </div>
         </div>
         <div className="setting">
@@ -1052,7 +1118,7 @@ export default function App() {
             {(STALE_KEYS[page] || []).some(stale) && <span className="stale-chip"><Loader2 size={12} className="spin" /> {t('stale.updating')}</span>}</div>
           <UpdateBanner status={appUpdate} />
           <Banner msg={shownMsg} onClose={() => setMsg(null)} />
-          {page === 'updates' && <UpdatesPage hw={hw} wu={wu} gpu={gpu} bios={bios} scan={scan} busy={lockWhile(scan.running)} onScan={fullScan} onInstall={installDrivers} onGpu={gpuInstall} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} onEnable={enable} prog={prog} />}
+          {page === 'updates' && <UpdatesPage hw={hw} wu={wu} gpu={gpu} bios={bios} scan={scan} soundKey={settings?.sound !== false && fresh.wu && !scan.running ? scan.at : null} busy={lockWhile(scan.running)} onScan={fullScan} onInstall={installDrivers} onGpu={gpuInstall} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} onEnable={enable} prog={prog} />}
           {page === 'hardware' && <HardwarePage hw={hw} onExport={exportHw} />}
           {page === 'overview' && <OverviewPage junk={junk} startup={startup} perf={perf} live={live} recs={recs && centerItems({ recs, bios, gpu, junk, startup, live, history })} go={setPage} />}
           {page === 'clean' && <CleanPage junk={junk} onRescan={() => { setJunk(null); loadJunk(); }} onClean={clean} busy={lockWhile(stale('junk'))} />}
@@ -1067,7 +1133,7 @@ export default function App() {
             />
           )}
           {page === 'history' && <HistoryPage busy={busy} onRestorePoint={restorePoint} />}
-          {page === 'settings' && <SettingsPage version={version} status={appUpdate} settings={settings} onLang={setLang} service={service} onInstallService={installService} onRemoveService={removeService} busy={busy} prog={prog} onPickDir={async () => setSettings(await api.pickSaveDir())} onCheck={async () => { setAppUpdate({ state: 'checking' }); if (!(await api.checkAppUpdate())) setAppUpdate({ state: 'dev' }); }} />}
+          {page === 'settings' && <SettingsPage version={version} status={appUpdate} settings={settings} onLang={setLang} onSound={async (on) => setSettings(await api.setSound(on))} service={service} onInstallService={installService} onRemoveService={removeService} busy={busy} prog={prog} onPickDir={async () => setSettings(await api.pickSaveDir())} onCheck={async () => { setAppUpdate({ state: 'checking' }); if (!(await api.checkAppUpdate())) setAppUpdate({ state: 'dev' }); }} />}
         </main>
         {guide && bios?.latest && <BiosGuide bios={bios} onClose={() => setGuide(false)} onDownload={biosDownload} busy={busy === 'bios'} prog={prog.bios} />}
         {settingGuide && <SettingGuide item={settingGuide} boardMaker={hw?.boardMaker} onClose={() => setSettingGuide(null)} />}

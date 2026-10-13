@@ -21,7 +21,7 @@ function getSettings() {
   let s = {};
   try { s = JSON.parse(fs.readFileSync(settingsFile(), 'utf8')); } catch { /* first run */ }
   // English unless the user picked Hebrew in Settings.
-  return { saveDir: s.saveDir && fs.existsSync(s.saveDir) ? s.saveDir : app.getPath('downloads'), lang: s.lang === 'he' ? 'he' : 'en' };
+  return { saveDir: s.saveDir && fs.existsSync(s.saveDir) ? s.saveDir : app.getPath('downloads'), lang: s.lang === 'he' ? 'he' : 'en', sound: s.sound !== false };
 }
 function saveSettings(s) {
   fs.mkdirSync(app.getPath('userData'), { recursive: true });
@@ -177,6 +177,10 @@ ipcMain.handle('admin:stop', () => sys.adminStop());
 ipcMain.handle('settings:get', () => getSettings());
 ipcMain.handle('settings:setLang', (_e, lang) => {
   saveSettings({ ...getSettings(), lang: lang === 'he' ? 'he' : 'en' });
+  return getSettings();
+});
+ipcMain.handle('settings:setSound', (_e, on) => {
+  saveSettings({ ...getSettings(), sound: !!on });
   return getSettings();
 });
 ipcMain.handle('settings:pickDir', async () => {

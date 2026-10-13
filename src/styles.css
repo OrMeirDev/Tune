@@ -496,3 +496,30 @@ html[dir=ltr] .path-text { text-align: left; }
 
 /* "Showing the last scan · updating…" next to the page name while fresh results load. */
 .stale-chip { display: inline-flex; align-items: center; gap: 5px; margin-inline-start: 10px; padding: 2px 9px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); font-size: 11.5px; }
+
+/* "Everything is up to date": the ring draws itself and fills green, the check is written in one
+   stroke, then a pop, a ripple and a few sparks; the words rise in after it. */
+.all-good { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 26px 16px 22px; text-align: center; }
+.ag-stage { position: relative; width: 104px; height: 104px; margin-bottom: 8px; }
+.ag-mark { position: relative; width: 104px; height: 104px; overflow: visible; filter: drop-shadow(0 8px 18px rgba(22, 163, 74, .28)); animation: ag-pop .55s cubic-bezier(.2, 1.5, .4, 1) .95s both; }
+.ag-ring { fill: transparent; stroke: var(--accent); stroke-width: 6; stroke-dasharray: 315; stroke-dashoffset: 315; transform: rotate(-90deg); transform-box: fill-box; transform-origin: center; animation: ag-draw .6s ease-out .05s forwards, ag-fill .35s ease-out .55s forwards; }
+.ag-check { fill: none; stroke: #fff; stroke-width: 9; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 70; stroke-dashoffset: 70; animation: ag-draw .32s cubic-bezier(.65, 0, .35, 1) .72s forwards; }
+.ag-wave { position: absolute; inset: 0; border-radius: 50%; border: 3px solid var(--accent); opacity: 0; animation: ag-wave .9s ease-out 1s forwards; }
+.ag-burst { position: absolute; top: 50%; left: 50%; width: 0; height: 0; }
+.ag-burst i { position: absolute; width: 8px; height: 8px; margin: -4px; border-radius: 50%; background: var(--accent); opacity: 0; animation: ag-spark .75s ease-out calc(1s + var(--d)) forwards; }
+.ag-burst i:nth-child(even) { width: 6px; height: 6px; margin: -3px; background: #86efac; }
+.ag-title { font-size: 19px; font-weight: 700; color: var(--text); opacity: 0; animation: ag-up .4s ease-out 1.05s forwards; }
+.ag-sub { font-size: 13px; color: var(--muted); opacity: 0; animation: ag-up .4s ease-out 1.15s forwards; }
+@keyframes ag-draw { to { stroke-dashoffset: 0; } }
+@keyframes ag-fill { to { fill: var(--accent); } }
+@keyframes ag-pop { 0% { transform: scale(1); } 45% { transform: scale(1.13); } 100% { transform: scale(1); } }
+@keyframes ag-wave { 0% { opacity: .55; transform: scale(1); } 100% { opacity: 0; transform: scale(1.9); } }
+@keyframes ag-spark {
+  0% { opacity: 1; transform: rotate(var(--a)) translateY(-46px) scale(1); }
+  100% { opacity: 0; transform: rotate(var(--a)) translateY(-86px) scale(.3); }
+}
+@keyframes ag-up { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .all-good *, .all-good { animation-duration: 1ms !important; animation-delay: 0s !important; }
+}
+.panel > .all-good { min-height: calc(100% - 42px); }

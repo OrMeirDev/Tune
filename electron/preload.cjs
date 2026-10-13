@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('tune', {
   getSettings: call('settings:get'),
   pickSaveDir: call('settings:pickDir'),
   setLanguage: call('settings:setLang'),
+  setSound: call('settings:setSound'),
   onProgress: (cb) => {
     const handler = (_e, p) => cb(p);
     ipcRenderer.on('task:progress', handler);
