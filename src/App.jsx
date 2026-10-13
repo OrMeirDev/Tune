@@ -178,39 +178,17 @@ function UpdateBanner({ status }) {
 
 // ---------------- driver updates ----------------
 
-// A short rising chime made on the spot (no sound file): three soft bell notes, C6 → E6 → G6, each a
-// sine with quieter overtones, a quick attack and a gentle fade; the last one rings a little longer.
+// The success sound (public/sounds/check-premium.mp3, 0.7 s, loudest about 0.12 s in).
 function playChime() {
   try {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    const ctx = new Ctx();
-    ctx.resume();
-    const master = ctx.createGain();
-    master.gain.value = 0.16;
-    master.connect(ctx.destination);
-    [[1046.5, 0], [1318.5, 0.11], [1568, 0.22]].forEach(([freq, at], i) => {
-      const last = i === 2;
-      for (const [mult, vol] of [[1, 1], [2, 0.22], [3, 0.07]]) {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = 'sine';
-        osc.frequency.value = freq * mult;
-        const t0 = ctx.currentTime + 0.02 + at;
-        gain.gain.setValueAtTime(0, t0);
-        gain.gain.linearRampToValueAtTime(vol * (last ? 1 : 0.75), t0 + 0.012);
-        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + (last ? 1.3 : 0.45));
-        osc.connect(gain);
-        gain.connect(master);
-        osc.start(t0);
-        osc.stop(t0 + 1.4);
-      }
-    });
-    setTimeout(() => ctx.close(), 2000);
+    const a = new Audio('sounds/check-premium.mp3');
+    a.volume = 0.8;
+    a.play().catch(() => {});
   } catch { /* no audio device: the animation is enough */ }
 }
 
 // "Everything is up to date": the ring draws itself, fills green, the check is written in one
-// stroke, then a pop, a ripple and a few sparks. The chime plays once per finished scan, timed to
+// stroke, then a pop, a ripple and a few sparks. The sound plays once per finished scan, timed to
 // the check (soundKey is the scan's time, or null for no sound).
 let lastChime = null;
 function AllGood({ soundKey }) {
@@ -218,7 +196,7 @@ function AllGood({ soundKey }) {
   useEffect(() => {
     if (!soundKey || soundKey === lastChime) return undefined;
     lastChime = soundKey;
-    const timer = setTimeout(playChime, 700);
+    const timer = setTimeout(playChime, 900);
     return () => clearTimeout(timer);
   }, [soundKey]);
   return (
