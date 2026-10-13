@@ -504,18 +504,22 @@ function StartupPage({ startup, onToggle, busy, prog }) {
 const cpuNoteKey = (n) => ({ 'no service': 'cpuNote.noService', 'pawnio not installed': 'cpuNote.pawnio', 'cpu not supported yet': 'cpuNote.unsupported' }[n] || 'cpuNote.unavailable');
 const rpm = (n, t) => ltr(`${Number(n).toLocaleString(t.locale)} RPM`);
 
-// "Why is my PC hot?": a plain-language finding from the CPU reading.
-// At rest a CPU usually sits around 30–50°C; warmer than that at idle is worth explaining.
-function coolingFindings(p, t) {
-  if (p.cpuTempC == null) return [];
-  const idle = p.cpuLoad < 20;
-  if (idle && p.cpuTempC >= 55) return [{ level: 'warn', text: t(p.cpuTempC >= 70 ? 'fd.cpuHot' : 'fd.cpuWarm', { t: p.cpuTempC }), tips: t('fd.tipCpu') }];
-  return [{ level: 'ok', text: t('fd.ok') }];
+// "Why is my PC hot?": a plain-language finding from the CPU readings.
+// At rest a CPU usually sits around 30–50°C; warmer than that at idle is worth explaining. Modern
+// CPUs jump 20°C for a fraction of a second on every small task, so one reading says little: the
+// finding uses the median of the last 30 seconds, and only the moments the CPU was at rest.
+const median = (a) => { const s = [...a].sort((x, y) => x - y); return s.length ? s[Math.floor(s.length / 2)] : null; };
+function coolingFindings(history, t) {
+  const rest = history.filter((h) => h.cpuTempC != null && h.cpuLoad != null && h.cpuLoad < 20);
+  if (rest.length < 5) return [];
+  const temp = median(rest.map((h) => h.cpuTempC));
+  if (temp >= 55) return [{ level: 'warn', text: t(temp >= 70 ? 'fd.cpuHot' : 'fd.cpuWarm', { t: temp }), tips: t('fd.tipCpu') }];
+  return [{ level: 'ok', text: t('fd.ok', { t: temp }) }];
 }
 
-function PerfPage({ perf, live, service, onRefresh, onInstallService, busy }) {
+function PerfPage({ perf, live, history = [], service, onRefresh, onInstallService, busy }) {
   const t = useT();
-  const findings = perf ? coolingFindings(perf, t) : [];
+  const findings = coolingFindings(history, t);
   const gpu = [].concat(perf?.gpuTemps || [])[0];
   const gpuTile = (
     <div key="gpu" className="stat" title={gpu?.name || ''}>
@@ -559,9 +563,11 @@ function PerfPage({ perf, live, service, onRefresh, onInstallService, busy }) {
 
 // ---------------- performance center ----------------
 
-// Live CPU readings from the background service, every 2 seconds while a page shows them.
+// Live CPU readings from the background service, every 2 seconds while a page shows them, with the
+// last 30 seconds kept so findings don't hang on a single momentary reading.
 function useLiveSensors(on) {
   const [live, setLive] = useState(null);
+  const [history, setHistory] = useState([]);
   useEffect(() => {
     if (!on || !api?.sensors) return undefined;
     let stop = false;
@@ -569,13 +575,16 @@ function useLiveSensors(on) {
     const tick = async () => {
       const r = await api.sensors().catch(() => null);
       if (stop) return;
-      if (r?.ok) setLive(r.data);
+      if (r?.ok) {
+        setLive(r.data);
+        setHistory((h) => [...h, r.data].slice(-15));
+      }
       timer = setTimeout(tick, 2000);
     };
     tick();
     return () => { stop = true; clearTimeout(timer); };
   }, [on]);
-  return live;
+  return [live, history];
 }
 
 // Temperature, power, voltage and clock of the CPU as tiles; `extra` adds tiles after them.
@@ -619,12 +628,14 @@ const GROUPS = [
   { id: 'cpu', icon: Cpu }, { id: 'board', icon: CircuitBoard }, { id: 'memory', icon: MemoryStick },
   { id: 'gpu', icon: Monitor }, { id: 'storage', icon: HardDrive }, { id: 'windows', icon: Settings2 },
 ];
-function centerItems({ recs, bios, gpu, junk, startup, live }) {
+function centerItems({ recs, bios, gpu, junk, startup, live, history = [] }) {
+  const recent = median(history.map((h) => h.cpuTempC).filter((x) => x != null));
   const items = (recs || []).map((r) => {
     // BIOS: checked against the maker's site, so its status comes from the BIOS check.
     if (r.key === 'bios') return { ...r, ok: bios?.supported ? !bios.newer : null };
-    // The power-limit tip turns into a finding when the CPU is very hot right now.
-    if (r.key === 'powerLimit') return { ...r, ok: live?.cpuTempC >= 90 ? false : null, tempC: live?.cpuTempC, powerW: live?.cpuPowerW };
+    // The power-limit tip turns into a finding when the CPU has been very hot for the last half
+    // minute (not on one momentary jump).
+    if (r.key === 'powerLimit') return { ...r, ok: history.length >= 5 && recent >= 90 ? false : null, tempC: recent ?? live?.cpuTempC, powerW: live?.cpuPowerW };
     return r;
   });
   const drivers = (gpu || []).filter((g) => g.vendor !== 'Intel' && g.latest);
@@ -680,9 +691,9 @@ function CenterRow({ r, bios, onApply, onBiosDownload, onBiosGuide, onGuide, go,
   );
 }
 
-function CenterPage({ recs, bios, gpu, junk, startup, live, service, onInstallService, onRefresh, onGuide, onBiosGuide, go, ...rowProps }) {
+function CenterPage({ recs, bios, gpu, junk, startup, live, history, service, onInstallService, onRefresh, onGuide, onBiosGuide, go, ...rowProps }) {
   const t = useT();
-  const items = useMemo(() => centerItems({ recs, bios, gpu, junk, startup, live }), [recs, bios, gpu, junk, startup, live]);
+  const items = useMemo(() => centerItems({ recs, bios, gpu, junk, startup, live, history }), [recs, bios, gpu, junk, startup, live, history]);
   const judged = items.filter((i) => i.ok != null);
   const good = judged.filter((i) => i.ok).length;
   return (
@@ -868,7 +879,7 @@ export default function App() {
   const [guide, setGuide] = useState(false);
   const [settingGuide, setSettingGuide] = useState(null);
   const [settings, setSettings] = useState(null);
-  const live = useLiveSensors(page === 'perf' || page === 'recs' || page === 'overview');
+  const [live, history] = useLiveSensors(page === 'perf' || page === 'recs' || page === 'overview');
   const [service, setService] = useState(null);
   // English until the saved choice is read; a first launch stays English.
   const t = useMemo(() => makeT(settings?.lang || 'en'), [settings?.lang]);
@@ -1008,13 +1019,13 @@ export default function App() {
           <Banner msg={shownMsg} onClose={() => setMsg(null)} />
           {page === 'updates' && <UpdatesPage hw={hw} wu={wu} gpu={gpu} bios={bios} scan={scan} onScan={fullScan} onInstall={installDrivers} onGpu={gpuInstall} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} onEnable={enable} busy={busy} prog={prog} />}
           {page === 'hardware' && <HardwarePage hw={hw} onExport={exportHw} />}
-          {page === 'overview' && <OverviewPage junk={junk} startup={startup} perf={perf} live={live} recs={recs && centerItems({ recs, bios, gpu, junk, startup, live })} go={setPage} />}
+          {page === 'overview' && <OverviewPage junk={junk} startup={startup} perf={perf} live={live} recs={recs && centerItems({ recs, bios, gpu, junk, startup, live, history })} go={setPage} />}
           {page === 'clean' && <CleanPage junk={junk} onRescan={loadJunk} onClean={clean} busy={busy} />}
           {page === 'startup' && <StartupPage startup={startup} onToggle={toggle} busy={busy} prog={prog} />}
-          {page === 'perf' && <PerfPage perf={perf} live={live} service={service} onRefresh={() => { setPerf(null); loadPerf(); }} onInstallService={installService} busy={busy} />}
+          {page === 'perf' && <PerfPage perf={perf} live={live} history={history} service={service} onRefresh={() => { setPerf(null); loadPerf(); }} onInstallService={installService} busy={busy} />}
           {page === 'recs' && (
             <CenterPage
-              recs={recs} bios={bios} gpu={gpu} junk={junk} startup={startup} live={live} service={service} go={setPage}
+              recs={recs} bios={bios} gpu={gpu} junk={junk} startup={startup} live={live} history={history} service={service} go={setPage}
               onInstallService={installService} onRefresh={() => { setRecs(null); loadRecs(); }}
               onApply={apply} onBiosDownload={biosDownload} onBiosGuide={() => (bios?.latest ? setGuide(true) : setPage('updates'))}
               onGuide={setSettingGuide} busy={busy} prog={prog}

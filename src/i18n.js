@@ -198,10 +198,10 @@ const en = {
   'cpuNote.unsupported': 'Intel processors only for now',
   'cpuNote.unavailable': 'Sensor not available right now',
 
-  'fd.cpuHot': 'The CPU is hot ({t}°C) at rest. At rest it is usually 30–50°C.',
-  'fd.cpuWarm': 'The CPU is warmer than usual ({t}°C) at rest. At rest it is usually 30–50°C.',
+  'fd.cpuHot': 'The CPU is hot ({t}°C) at rest, over the last 30 seconds. At rest it is usually 30–50°C.',
+  'fd.cpuWarm': 'The CPU is warmer than usual ({t}°C) at rest, over the last 30 seconds. At rest it is usually 30–50°C.',
   'fd.tipCpu': 'Worth checking: the power plan (Balanced suits most PCs; Ultimate Performance keeps the CPU at full speed even at rest), dust in the cooler and fans, and the programs loading the CPU in the background (list below).',
-  'fd.ok': 'Cooling looks fine based on the current readings.',
+  'fd.ok': 'At rest the CPU is at {t}°C over the last 30 seconds. Cooling looks fine. (Short jumps of 20°C on small tasks are normal.)',
 
   'rc.title': 'Recommended settings',
   'rc.subtitle': 'Only changes that can be explained and undone. No registry "tricks".',
@@ -623,10 +623,10 @@ const he = {
   'cpuNote.unsupported': 'עדיין רק למעבדי Intel',
   'cpuNote.unavailable': 'החיישן לא זמין כרגע',
 
-  'fd.cpuHot': 'המעבד חם ({t}°C) בזמן מנוחה. בדרך כלל במנוחה הוא 30–50°C.',
-  'fd.cpuWarm': 'המעבד חם מהרגיל ({t}°C) בזמן מנוחה. בדרך כלל במנוחה הוא 30–50°C.',
+  'fd.cpuHot': 'המעבד חם ({t}°C) בזמן מנוחה, לאורך 30 השניות האחרונות. בדרך כלל במנוחה הוא 30–50°C.',
+  'fd.cpuWarm': 'המעבד חם מהרגיל ({t}°C) בזמן מנוחה, לאורך 30 השניות האחרונות. בדרך כלל במנוחה הוא 30–50°C.',
   'fd.tipCpu': 'כדאי לבדוק: תוכנית צריכת החשמל (Balanced מתאימה לרוב המחשבים; Ultimate Performance מחזיקה את המעבד במהירות מלאה גם במנוחה), אבק בקירור ובמאווררים, ותוכנות שמעמיסות ברקע (ברשימה למטה).',
-  'fd.ok': 'הקירור נראה תקין לפי הקריאות עכשיו.',
+  'fd.ok': 'במנוחה המעבד ב-{t}°C לאורך 30 השניות האחרונות. הקירור נראה תקין. (קפיצות קצרות של 20°C במשימות קטנות הן רגילות.)',
 
   'rc.title': 'הגדרות מומלצות',
   'rc.subtitle': 'רק שינויים שאפשר להסביר ולבטל. בלי "טריקים" ברג׳יסטרי.',

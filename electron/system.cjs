@@ -789,9 +789,22 @@ const liveCpu = (s) => {
   };
 };
 
-// Only the service's sensors: quick enough to refresh every couple of seconds while a page shows them.
+// CPU load since the previous call, from the time Windows counts per core (no extra process, so
+// measuring it doesn't itself load the CPU). The first call has nothing to compare with.
+let lastTimes = null;
+function cpuLoadNow() {
+  const sum = os.cpus().reduce((a, c) => { const t = c.times; a.idle += t.idle; a.total += t.user + t.nice + t.sys + t.irq + t.idle; return a; }, { idle: 0, total: 0 });
+  const prev = lastTimes;
+  lastTimes = sum;
+  if (!prev || sum.total <= prev.total) return null;
+  return Math.round(100 * (1 - (sum.idle - prev.idle) / (sum.total - prev.total)));
+}
+
+// Only the service's sensors (and the load): quick enough to refresh every couple of seconds while
+// a page shows them.
 async function sensors() {
-  return { ok: true, data: liveCpu(await serviceCall({ op: 'sensors' }, { timeoutMs: 5000 })) };
+  const load = cpuLoadNow();
+  return { ok: true, data: { ...liveCpu(await serviceCall({ op: 'sensors' }, { timeoutMs: 5000 })), cpuLoad: load } };
 }
 
 // Hardware sensors come from the background service (LibreHardwareMonitor); load, memory and the
