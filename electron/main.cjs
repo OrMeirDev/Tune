@@ -214,6 +214,14 @@ function createWindow() {
   else win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
 }
 
+// One Tune at a time: opening it again brings the open window to the front instead.
+const focusMain = () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+};
+
 // The installer runs "Tune.exe --install-service" (and the uninstaller "--uninstall-service"):
 // do just that, with Windows' one approval prompt, and exit without opening a window.
 const serviceArg = process.argv.find((a) => a === '--install-service' || a === '--uninstall-service');
@@ -224,7 +232,10 @@ if (serviceArg) {
     if (r.ok) addHistory('service', install ? { installed: true, pawnio: r.data.pawnio, at: 'setup' } : { installed: false });
     app.exit(r.ok ? 0 : 1);
   });
+} else if (!app.requestSingleInstanceLock()) {
+  app.exit(0);
 } else {
+  app.on('second-instance', focusMain);
   app.whenReady().then(() => { prewarm(); createWindow(); });
 }
 app.on('window-all-closed', () => app.quit());
