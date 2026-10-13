@@ -706,7 +706,9 @@ function CenterRow({ r, bios, onApply, onBiosDownload, onBiosGuide, onGuide, go,
   const t = useT();
   const isBios = r.key === 'bios';
   const note = isBios && bios?.supported
-    ? (bios.newer ? `${t('rc.biosNewer', { v: bios.latest.version, maker: bios.maker, date: bios.latest.date })} ${recNote(r, t)}` : t('rc.biosLatest', { maker: bios.maker }))
+    ? (bios.newer ? `${t('rc.biosNewer', { v: bios.latest.version, maker: bios.maker, date: bios.latest.date })} ${recNote(r, t)}`
+      : bios.onBeta ? t('rc.biosOnBeta', { v: bios.installed, stable: bios.latest.version, maker: bios.maker })
+        : t('rc.biosLatest', { maker: bios.maker })) + (bios.beta ? t('rc.biosBetaToo', { v: bios.beta.version }) : '')
     : recNote(r, t);
   const value = String(recValue(r, t) ?? '');
   const tip = r.ok == null && !isBios;
