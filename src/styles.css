@@ -523,3 +523,7 @@ html[dir=ltr] .path-text { text-align: left; }
   .all-good *, .all-good { animation-duration: 1ms !important; animation-delay: 0s !important; }
 }
 .panel > .all-good { min-height: calc(100% - 42px); }
+
+/* The app icon beside the name: exact-size images (no resampling blur) with a soft glow in the
+   app's color, so the glass icon lifts off the sidebar. */
+.brand-logo { display: block; flex-shrink: 0; filter: drop-shadow(0 3px 8px color-mix(in srgb, var(--accent) 35%, transparent)); user-select: none; -webkit-user-drag: none; }

@@ -1,11 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  SlidersHorizontal, RefreshCw, Cpu, Sparkles, Trash2, Rocket, Thermometer, Settings2, History, Settings, Home,
+  RefreshCw, Cpu, Sparkles, Trash2, Rocket, Thermometer, Settings2, History, Settings, Home,
   ChevronLeft, ChevronRight, Download, Monitor, Wifi, Bluetooth, Network, Volume2, HardDrive, Usb, Camera, AlertTriangle, Check,
   Loader2, ShieldCheck, ExternalLink, Search, Undo2, RotateCcw, FolderOpen, FileSpreadsheet, FileText,
   CircuitBoard, ScanSearch, Info, X, Globe, MemoryStick, Gauge, Zap, Activity, BookOpen,
 } from 'lucide-react';
+import logo1x from './assets/logo-1x.png';
+import logo125 from './assets/logo-1_25x.png';
+import logo15 from './assets/logo-1_5x.png';
+import logo2x from './assets/logo-2x.png';
+
 import { LangContext, makeT, useT } from './i18n.js';
+
+// The app icon beside the name, drawn at its exact size for each display scale so it stays sharp.
+const LOGO_SET = `${logo1x} 1x, ${logo125} 1.25x, ${logo15} 1.5x, ${logo2x} 2x`;
 
 const api = window.tune;
 
@@ -1073,7 +1081,7 @@ export default function App() {
     <LangContext.Provider value={t}>
       <div className="app">
         <aside className="sidebar">
-          <div className="brand"><span>Tune</span><SlidersHorizontal size={24} strokeWidth={2.4} className="brand-icon" /></div>
+          <div className="brand"><span>Tune</span><img className="brand-logo" src={logo1x} srcSet={LOGO_SET} width={34} height={34} alt="" draggable={false} /></div>
           <nav>
             {PAGES.map((p, i) => (p.group !== undefined
               ? <div key={`g${i}`} className="nav-group">{p.group ? t(p.group) : ''}</div>
