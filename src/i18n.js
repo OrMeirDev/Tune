@@ -150,6 +150,7 @@ const en = {
   'ov.recs': 'Performance center',
   'ov.toImprove': '{n} to improve',
   'ov.oneToImprove': '1 to improve',
+  'stale.updating': 'Showing the last scan · updating…',
   'ov.allOk': 'All good',
   'ov.allRecs': 'Open the performance center',
 
@@ -575,6 +576,7 @@ const he = {
   'ov.recs': 'מרכז ביצועים',
   'ov.toImprove': '{n} טעונים שיפור',
   'ov.oneToImprove': 'אחד טעון שיפור',
+  'stale.updating': 'מוצגת הסריקה הקודמת · מתעדכן…',
   'ov.allOk': 'הכול תקין',
   'ov.allRecs': 'למרכז הביצועים',
 

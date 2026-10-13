@@ -4,6 +4,8 @@ const call = (channel) => (...args) => ipcRenderer.invoke(channel, ...args);
 
 contextBridge.exposeInMainWorld('tune', {
   scanHardware: call('hw:scan'),
+  cacheGet: call('cache:get'),
+  cacheSet: call('cache:set'),
   driverUpdates: call('drv:updates'),
   gpuCheck: call('drv:gpu'),
   installDrivers: call('drv:install'),

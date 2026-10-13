@@ -52,8 +52,40 @@ ipcMain.handle('app:version', () => app.getVersion());
 // Long jobs report { key, phase, percent } so the row that started them can show it.
 const progressTo = (key) => (p) => mainWindow?.webContents.send('task:progress', { key, ...p });
 
-ipcMain.handle('hw:scan', () => sys.scanHardware());
-ipcMain.handle('drv:updates', () => sys.driverUpdates());
+// The slow scans start the moment Tune launches, before the window has even loaded; the page's
+// first request for each one picks up the scan already under way (later requests scan anew).
+const warm = new Map();
+function prewarm() {
+  warm.set('hw', sys.scanHardware());
+  warm.set('wu', sys.driverUpdates());
+  warm.set('junk', sys.junkScan());
+  warm.set('startup', sys.startupList());
+  warm.set('recs', sys.recommendations());
+}
+const warmOr = (key, fn) => { const p = warm.get(key); warm.delete(key); return p || fn(); };
+
+// The last results, so the next launch can show them at once while fresh ones load.
+const CACHE_KEYS = ['hw', 'wu', 'gpu', 'bios', 'junk', 'startup', 'recs', 'scanAt'];
+const cacheFile = () => path.join(app.getPath('userData'), 'cache.json');
+let cache = null;
+const readCache = () => {
+  if (!cache) { try { cache = JSON.parse(fs.readFileSync(cacheFile(), 'utf8')); } catch { cache = {}; } }
+  return cache;
+};
+ipcMain.handle('cache:get', () => readCache());
+ipcMain.handle('cache:set', (_e, key, value) => {
+  if (!CACHE_KEYS.includes(key)) return;
+  const c = readCache();
+  c[key] = value;
+  try {
+    fs.mkdirSync(app.getPath('userData'), { recursive: true });
+    fs.writeFileSync(`${cacheFile()}.tmp`, JSON.stringify(c));
+    fs.renameSync(`${cacheFile()}.tmp`, cacheFile());
+  } catch { /* the cache is only a convenience */ }
+});
+
+ipcMain.handle('hw:scan', () => warmOr('hw', sys.scanHardware));
+ipcMain.handle('drv:updates', () => warmOr('wu', sys.driverUpdates));
 ipcMain.handle('drv:gpu', (_e, gpus, amdSoftware) => sys.gpuVendorCheck(gpus, amdSoftware));
 ipcMain.handle('drv:install', async (_e, items, key) => {
   const r = await sys.installDrivers(items.map((i) => i.id), progressTo(key));
@@ -88,7 +120,7 @@ ipcMain.handle('hw:export', (_e, hw, format) => {
 // Folders shown on the cleanup page open in Explorer; only folders the last scan reported.
 let junkDirs = new Set();
 ipcMain.handle('junk:scan', async () => {
-  const r = await sys.junkScan();
+  const r = await warmOr('junk', sys.junkScan);
   if (r.ok) junkDirs = new Set([].concat(r.data || []).flatMap((c) => [].concat(c.dirs || [])));
   return r;
 });
@@ -98,7 +130,7 @@ ipcMain.handle('junk:clean', async (_e, cats) => {
   if (r.ok) addHistory('clean', { cats: cats.map((c) => c.key), freed: r.data.freed });
   return r;
 });
-ipcMain.handle('startup:list', () => sys.startupList());
+ipcMain.handle('startup:list', () => warmOr('startup', sys.startupList));
 ipcMain.handle('startup:toggle', async (_e, item, enable) => {
   const r = await sys.startupToggle(item.source, item.key, enable);
   if (r.ok) addHistory('startup', { name: item.name, enabled: enable });
@@ -106,7 +138,7 @@ ipcMain.handle('startup:toggle', async (_e, item, enable) => {
 });
 ipcMain.handle('perf:get', () => sys.performance());
 ipcMain.handle('perf:sensors', () => sys.sensors());
-ipcMain.handle('rec:list', () => sys.recommendations());
+ipcMain.handle('rec:list', () => warmOr('recs', sys.recommendations));
 ipcMain.handle('rec:apply', async (_e, rec) => {
   const r = await sys.applyRecommendation(rec.key);
   if (r.ok) addHistory('setting', { key: rec.key });
@@ -167,9 +199,12 @@ function createWindow() {
     title: 'Tune',
     backgroundColor: '#f6f7fb',
     autoHideMenuBar: true,
+    show: false,
     webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.cjs') },
   });
   mainWindow = win;
+  // Shown once the page has drawn, so it opens complete instead of blank.
+  win.once('ready-to-show', () => win.show());
   win.webContents.once('did-finish-load', () => {
     if (!app.isPackaged) return;
     setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 3000);
@@ -190,7 +225,7 @@ if (serviceArg) {
     app.exit(r.ok ? 0 : 1);
   });
 } else {
-  app.whenReady().then(createWindow);
+  app.whenReady().then(() => { prewarm(); createWindow(); });
 }
 app.on('window-all-closed', () => app.quit());
 // Closing Tune also ends an open admin session instead of leaving it for the rest of its 10 minutes.

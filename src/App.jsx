@@ -653,6 +653,8 @@ function centerItems({ recs, bios, gpu, junk, startup, live, history = [] }) {
   }
   return items;
 }
+// Which results each page shows, for the "showing the last scan · updating" label.
+const STALE_KEYS = { updates: ['wu', 'gpu', 'bios'], hardware: ['hw'], overview: ['junk', 'startup', 'recs'], clean: ['junk'], startup: ['startup'], recs: ['recs'] };
 const statusRank = (ok) => (ok === false ? 0 : ok == null ? 1 : 2);
 
 function CenterRow({ r, bios, onApply, onBiosDownload, onBiosGuide, onGuide, go, busy, prog }) {
@@ -889,27 +891,43 @@ export default function App() {
     document.documentElement.dir = t.lang === 'he' ? 'rtl' : 'ltr';
   }, [t]);
 
+  // What the page shows came from the last launch until this launch's own result arrives; actions
+  // on that data wait for the fresh result (`stale`). Every fresh result is kept for next time.
+  const [fromCache, setFromCache] = useState({});
+  const [fresh, setFresh] = useState({});
+  const markFresh = useCallback((key, value) => {
+    setFresh((f) => ({ ...f, [key]: true }));
+    api.cacheSet?.(key, value);
+  }, []);
+  const stale = (key) => !!fromCache[key] && !fresh[key];
+  // While a page still shows the last launch's data its action buttons wait: 'stale' counts as busy
+  // (it matches no row, so no row shows progress).
+  const lockWhile = (cond) => busy || (cond ? 'stale' : null);
+
   const loadService = useCallback(async () => setService(await api.serviceStatus()), []);
-  const loadJunk = useCallback(async () => { setJunk(null); const r = await api.junkScan(); setJunk(r.ok ? [].concat(r.data) : []); }, []);
-  const loadStartup = useCallback(async () => { const r = await api.startupList(); setStartup(r.ok ? [].concat(r.data || []) : []); }, []);
+  const loadJunk = useCallback(async () => { const r = await api.junkScan(); const v = r.ok ? [].concat(r.data) : []; setJunk(v); if (r.ok) markFresh('junk', v); }, [markFresh]);
+  const loadStartup = useCallback(async () => { const r = await api.startupList(); const v = r.ok ? [].concat(r.data || []) : []; setStartup(v); if (r.ok) markFresh('startup', v); }, [markFresh]);
   const loadPerf = useCallback(async () => { const r = await api.performance(); if (r.ok) setPerf(r.data); }, []);
-  const loadRecs = useCallback(async () => { const r = await api.recommendations(); setRecs(r.ok ? [].concat(r.data) : []); }, []);
+  const loadRecs = useCallback(async () => { const r = await api.recommendations(); const v = r.ok ? [].concat(r.data) : []; setRecs(v); if (r.ok) markFresh('recs', v); }, [markFresh]);
 
   // Drivers only: after an install, to refresh what is still offered.
   const scanDrivers = useCallback(async () => {
     const h = await api.scanHardware();
-    if (h.ok) setHw(h.data);
+    if (h.ok) { setHw(h.data); markFresh('hw', h.data); }
     const w = await api.driverUpdates();
     setWu(w.ok ? [].concat(w.data || []) : []);
-  }, []);
+    if (w.ok) markFresh('wu', [].concat(w.data || []));
+  }, [markFresh]);
 
-  // Full scan: components, then every update source at once, then the optimization pages.
+  // Full scan. The optimization pages don't depend on the driver scan, so they load right away,
+  // side by side with it, and can be used while Windows Update is still searching.
   // Step labels are dictionary keys, so they follow a language change mid-scan.
   const fullScan = useCallback(async () => {
     const step = (n, label) => setScan((s) => ({ ...s, running: true, step: n, label }));
+    const optimize = Promise.all([loadJunk(), loadStartup(), loadRecs(), loadPerf()]);
     step(1, 'scan.s1');
     const h = await api.scanHardware();
-    if (h.ok) setHw(h.data);
+    if (h.ok) { setHw(h.data); markFresh('hw', h.data); }
     step(2, 'scan.s2');
     const board = h.ok ? { maker: h.data.boardMaker, model: h.data.boardModel, version: h.data.bios.version, date: h.data.bios.date, systemMaker: h.data.systemMaker, systemModel: h.data.systemModel, systemSku: h.data.systemSku } : null;
     const [w, g, b] = await Promise.all([
@@ -918,13 +936,29 @@ export default function App() {
       board ? api.biosCheck(board) : Promise.resolve({ ok: false }),
     ]);
     setWu(w.ok ? [].concat(w.data || []) : []);
-    if (!w.ok) setMsg({ kind: 'err', key: 'msg.wuFailed', vars: { e: w.error } });
+    if (w.ok) markFresh('wu', [].concat(w.data || []));
+    else setMsg({ kind: 'err', key: 'msg.wuFailed', vars: { e: w.error } });
     setGpu(g.ok ? [].concat(g.data || []) : []);
+    if (g.ok) markFresh('gpu', [].concat(g.data || []));
     setBios(b.ok ? b.data : { supported: false, page: null });
+    if (b.ok) markFresh('bios', b.data);
     step(3, 'scan.s3');
-    await Promise.all([loadJunk(), loadStartup(), loadRecs(), loadPerf()]);
-    setScan((s) => ({ ...s, running: false, at: Date.now() }));
-  }, [loadJunk, loadStartup, loadRecs, loadPerf]);
+    await optimize;
+    const at = Date.now();
+    setScan((s) => ({ ...s, running: false, at }));
+    api.cacheSet?.('scanAt', at);
+  }, [loadJunk, loadStartup, loadRecs, loadPerf, markFresh]);
+
+  // The last launch's results, shown at once; this launch's scan replaces them as they arrive.
+  const showCached = useCallback(async () => {
+    const c = (await api.cacheGet?.().catch(() => null)) || {};
+    const keys = {};
+    const use = (key, set) => { if (c[key] != null) { set(c[key]); keys[key] = true; } };
+    use('hw', setHw); use('wu', setWu); use('gpu', setGpu); use('bios', setBios);
+    use('junk', setJunk); use('startup', setStartup); use('recs', setRecs);
+    setFromCache(keys);
+    if (c.scanAt) setScan((s) => ({ ...s, at: c.scanAt }));
+  }, []);
 
   useEffect(() => {
     if (!api) return undefined;
@@ -934,9 +968,9 @@ export default function App() {
     loadService();
     const offUpdate = api.onAppUpdate(setAppUpdate);
     const offProgress = api.onProgress((p) => setProg((m) => ({ ...m, [p.key]: p })));
-    fullScan();
+    showCached().finally(fullScan);
     return () => { offUpdate(); offProgress(); };
-  }, [fullScan, loadService]);
+  }, [fullScan, loadService, showCached]);
 
   // Every action that changes the system: one at a time, progress on its row, result in a banner.
   // Actions that need admin rights show "waiting for approval" until Windows' prompt is answered.
@@ -1014,21 +1048,22 @@ export default function App() {
           </div>
         </aside>
         <main className="main">
-          <div className="breadcrumbs"><Home size={15} /> <Crumb size={13} /> <span>{t(PAGES.find((p) => p.id === page)?.key || '')}</span></div>
+          <div className="breadcrumbs"><Home size={15} /> <Crumb size={13} /> <span>{t(PAGES.find((p) => p.id === page)?.key || '')}</span>
+            {(STALE_KEYS[page] || []).some(stale) && <span className="stale-chip"><Loader2 size={12} className="spin" /> {t('stale.updating')}</span>}</div>
           <UpdateBanner status={appUpdate} />
           <Banner msg={shownMsg} onClose={() => setMsg(null)} />
-          {page === 'updates' && <UpdatesPage hw={hw} wu={wu} gpu={gpu} bios={bios} scan={scan} onScan={fullScan} onInstall={installDrivers} onGpu={gpuInstall} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} onEnable={enable} busy={busy} prog={prog} />}
+          {page === 'updates' && <UpdatesPage hw={hw} wu={wu} gpu={gpu} bios={bios} scan={scan} busy={lockWhile(scan.running)} onScan={fullScan} onInstall={installDrivers} onGpu={gpuInstall} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} onEnable={enable} prog={prog} />}
           {page === 'hardware' && <HardwarePage hw={hw} onExport={exportHw} />}
           {page === 'overview' && <OverviewPage junk={junk} startup={startup} perf={perf} live={live} recs={recs && centerItems({ recs, bios, gpu, junk, startup, live, history })} go={setPage} />}
-          {page === 'clean' && <CleanPage junk={junk} onRescan={loadJunk} onClean={clean} busy={busy} />}
-          {page === 'startup' && <StartupPage startup={startup} onToggle={toggle} busy={busy} prog={prog} />}
+          {page === 'clean' && <CleanPage junk={junk} onRescan={() => { setJunk(null); loadJunk(); }} onClean={clean} busy={lockWhile(stale('junk'))} />}
+          {page === 'startup' && <StartupPage startup={startup} onToggle={toggle} busy={lockWhile(stale('startup'))} prog={prog} />}
           {page === 'perf' && <PerfPage perf={perf} live={live} history={history} service={service} onRefresh={() => { setPerf(null); loadPerf(); }} onInstallService={installService} busy={busy} />}
           {page === 'recs' && (
             <CenterPage
               recs={recs} bios={bios} gpu={gpu} junk={junk} startup={startup} live={live} history={history} service={service} go={setPage}
               onInstallService={installService} onRefresh={() => { setRecs(null); loadRecs(); }}
               onApply={apply} onBiosDownload={biosDownload} onBiosGuide={() => (bios?.latest ? setGuide(true) : setPage('updates'))}
-              onGuide={setSettingGuide} busy={busy} prog={prog}
+              onGuide={setSettingGuide} busy={lockWhile(stale('recs'))} prog={prog}
             />
           )}
           {page === 'history' && <HistoryPage busy={busy} onRestorePoint={restorePoint} />}
