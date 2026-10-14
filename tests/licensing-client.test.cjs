@@ -395,11 +395,16 @@ test('one request at a time; a second one is told, not queued', async (t) => {
   assert.equal(outcome(await first), 'codeSent');
 });
 
-test('without a configured server, licensing is off and says so', async () => {
+test('without a configured server, licensing is off, says so, and runs nothing at start', async () => {
   const store = createProtectedStore({ file: path.join(os.tmpdir(), `tune-none-${process.pid}.bin`), crypt: fakeCrypt() });
-  const client = createLicensingClient({ config: { url: null, publicKey: null, problem: 'notConfigured' }, api: null, store, machineId: async () => ({ ok: false }) });
+  let identityReads = 0;
+  const client = createLicensingClient({ config: { url: null, publicKey: null, problem: 'notConfigured' }, api: null, store, machineId: async () => { identityReads++; return { ok: false }; } });
+  await client.init();
+  await client.status();
+  assert.equal(identityReads, 0, 'no identity query (PowerShell on Windows) while licensing is off');
   const r = await client.activate('x');
   assert.deepEqual([r.data.available, r.data.problem, outcome(r), r.data.license.state], [false, 'notConfigured', 'notConfigured', 'none']);
+  assert.equal(identityReads, 0);
 });
 
 test('configuration: packaged builds ignore development settings; only https or this PC', () => {

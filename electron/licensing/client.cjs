@@ -315,7 +315,9 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
 
   async function status() {
     load();
-    await ensureMachine();
+    // the machine id (a PowerShell query on Windows) is read only when it can matter: licensing is
+    // configured, or a licence is stored; with the shipped defaults nothing runs
+    if (api || (saved && saved.license)) await ensureMachine();
     touchClock();
     return answer();
   }
