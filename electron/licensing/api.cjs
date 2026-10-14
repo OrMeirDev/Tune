@@ -1,9 +1,11 @@
 // Requests to the licensing server: POST, JSON in and out, a bounded time per request (connecting,
 // waiting and reading the answer all count), a bounded answer size, no redirects, and one result
 // shape. A request that gets no usable answer (no network, a timeout, a server error, an answer that
-// isn't the server's JSON) is { result: 'unavailable', reason }: nothing was decided, and the
-// caller may send the same request again. `fetch` is injected (Electron's net.fetch in the app, so
-// the system's proxy settings apply; a stand-in in tests).
+// isn't the server's JSON) is { result: 'unavailable', reason }: its result is NOT known. The server
+// may have carried it out (an answer lost on the way back) or not; the caller sends the same request
+// again (the same idempotency key, so the server treats it as the same) to find out, and never tells
+// the person that nothing changed. `fetch` is injected (Electron's net.fetch in the app, so the
+// system's proxy settings apply; a stand-in in tests).
 const ROUTES = {
   challenge: '/v1/owner/challenge',
   verify: '/v1/owner/verify',
@@ -55,7 +57,7 @@ function createApi({ baseUrl, fetch, timeoutMs = 15000, maxBytes = 64 * 1024 }) 
         redirect: 'error',
       });
       const text = await readLimited(res, maxBytes);
-      // a server error decided nothing
+      // a server error: the result isn't known either (the server may have failed after acting)
       if (res.status >= 500) return unavailable('server', res.status);
       let json;
       try { json = JSON.parse(text); } catch { return unavailable('badAnswer', res.status); }

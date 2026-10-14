@@ -10,6 +10,9 @@
 //               still valid
 //   revoked / licenseExpired   the server said so on the last check (the certificate is kept, not
 //               deleted, but no longer counts)
+//   released    the server confirmed that this PC's seat was released (the owner moved the licence);
+//               kept until a recovery the server approves. An offline PC that never got this answer
+//               keeps following its signed certificate.
 //   clock       this PC's clock is earlier than the last time Tune saw it, or than the certificate's
 //               issue time: the clock was set back, so no time-based answer can be trusted until it
 //               is correct again
@@ -26,6 +29,8 @@ const CLOCK_SKEW_MS = 10 * 60_000;
 
 function evaluate({ license, lastSeenAt, publicKey, machineId, devicePublicKey, now }) {
   if (!license || !license.certificate) return { state: 'none' };
+  // a confirmed release only takes rights away, so it holds whatever the certificate says
+  if (license.serverStatus === 'released') return { state: 'released', payload: license.certificate.payload };
   if (!publicKey || !machineId || !devicePublicKey) return { state: 'invalid', reason: 'unverifiable' };
   if (Number.isFinite(lastSeenAt) && now < lastSeenAt - CLOCK_SKEW_MS) return { state: 'clock', reason: 'behindLastSeen' };
   let v;

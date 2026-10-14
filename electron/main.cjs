@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, screen, dialog, safeStorage, net } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, screen, dialog, safeStorage, net, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -122,6 +122,8 @@ const licensing = () => (licensingParts ||= createLicensing({
   userData: app.getPath('userData'),
   safeStorage,
   fetch: typeof net.fetch === 'function' ? (url, init) => net.fetch(url, init) : globalThis.fetch,
+  // a renewal or release seen in the background: the window reads the new status
+  onChange: () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('license:changed'); },
 }));
 
 // The background service ships in resources/service (service/bin while developing).
@@ -230,8 +232,14 @@ if (serviceArg) {
 } else {
   app.on('second-instance', focusMain);
   // licensing reads what is stored and renews in the background when due; it never delays the window
-  app.whenReady().then(() => { prewarm(); createWindow(); licensing().client.init(); });
+  app.whenReady().then(() => {
+    prewarm();
+    createWindow();
+    licensing().client.init();
+    // after sleep or a locked session the licence is looked at again at once (timers may have missed it)
+    for (const e of ['resume', 'unlock-screen']) powerMonitor.on(e, () => licensing().client.wake());
+  });
 }
 app.on('window-all-closed', () => app.quit());
 // Closing Tune also ends an open admin session instead of leaving it for the rest of its 10 minutes.
-app.on('will-quit', () => sys.adminStop());
+app.on('will-quit', () => { sys.adminStop(); if (licensingParts) licensingParts.client.dispose(); });

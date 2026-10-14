@@ -57,6 +57,11 @@ contextBridge.exposeInMainWorld('tune', {
   checkAppUpdate: call('update:check'),
   downloadAppUpdate: call('update:download'),
   installAppUpdate: call('update:install'),
+  onLicenseChange: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on('license:changed', handler);
+    return () => ipcRenderer.removeListener('license:changed', handler);
+  },
   onAppUpdate: (cb) => {
     const handler = (_e, s) => cb(s);
     ipcRenderer.on('update:status', handler);

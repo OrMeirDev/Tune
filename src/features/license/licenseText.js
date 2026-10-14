@@ -1,5 +1,6 @@
 // The words for the licence: its state, its dates, and what the last licensing action came to.
 import { fmtDate } from '../../presentation/format.jsx';
+import { outcomeKey } from './outcomeKey.mjs';
 
 // "Active · tune-pro · certificate until … · licence until … · last checked …"
 export function licenseLines(lic, t) {
@@ -18,7 +19,7 @@ export const GOOD = ['codeSent', 'ownerVerified', 'activated', 'recovered', 'ref
 
 export function outcomeText(o, t) {
   if (!o) return '';
-  const key = `lic.o.${o.result}`;
+  const key = outcomeKey(o);
   const s = t(key, { n: o.attemptsLeft ?? o.deviceLimit ?? '', s: o.retryAfterSeconds ?? '' });
   return s === key ? t('lic.o.failed') : s;
 }

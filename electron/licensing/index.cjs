@@ -11,7 +11,8 @@ const { createEntitlements, FEATURE_OF } = require('./entitlements.cjs');
 const { readMachineId } = require('./identity.cjs');
 const { createProtectedStore, electronCrypt, insecureTestCrypt } = require('./protected-store.cjs');
 
-function createLicensing({ packaged, userData, safeStorage, fetch, env = process.env, now = Date.now }) {
+// onChange: told when the licence changed without the window asking (a background renewal).
+function createLicensing({ packaged, userData, safeStorage, fetch, env = process.env, now = Date.now, onChange }) {
   const config = licensingConfig({ packaged, env });
   const crypt = config.testStorage ? insecureTestCrypt() : electronCrypt(safeStorage);
   const store = createProtectedStore({ file: path.join(userData, 'license.bin'), crypt });
@@ -23,7 +24,7 @@ function createLicensing({ packaged, userData, safeStorage, fetch, env = process
     return identity;
   };
   const api = config.url ? createApi({ baseUrl: config.url, fetch }) : null;
-  const client = createLicensingClient({ config, api, store, machineId, now });
+  const client = createLicensingClient({ config, api, store, machineId, now, onChange });
   const entitlements = createEntitlements({ policy: config.policy, license: client.current });
   return {
     client,

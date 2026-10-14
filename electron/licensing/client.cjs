@@ -17,23 +17,45 @@
 //   this owner's licence on this PC, and a full licence is reported as full.
 // - This install's device key is stored (protected) before any request carries its public half, and
 //   is never stored unprotected: without protected storage nothing is activated.
+// - While Tune runs, the licence renews itself before its signed certificate ends (and after an
+//   outage, once the server answers again), one request at a time, with growing gaps between failed
+//   tries. A release or revocation the server confirmed is kept (protected) and stops renewal; only a
+//   recovery the server approves, with a certificate that verifies, makes this PC active again.
 const crypto = require('node:crypto');
 const { normalize } = require('./serial.cjs');
 const { signRequest } = require('./device-keys.cjs');
 const { deviceKeyFrom, newDeviceKey } = require('./identity.cjs');
 const { evaluate, checkAnswer } = require('./license-state.cjs');
 
-const HOUR = 3600_000;
+const MINUTE = 60_000;
+const HOUR = 60 * MINUTE;
 // how often the last-seen time is written while Tune runs (it is also written with every licence)
-const LAST_SEEN_EVERY_MS = 10 * 60_000;
+const LAST_SEEN_EVERY_MS = 10 * MINUTE;
 // renew in the background when the last check is older than this, or the certificate ends sooner
 const REFRESH_AFTER_MS = 12 * HOUR;
 const REFRESH_BEFORE_END_MS = 48 * HOUR;
+// after a renewal that got no answer: try again after 1, 2, 4 ... minutes, at most an hour apart
+const RETRY_FIRST_MS = MINUTE;
+const RETRY_MAX_MS = HOUR;
+// the longest any timer waits: a missed timer (the PC slept) or a clock change is seen within this
+const LOOK_EVERY_MS = 15 * MINUTE;
+// what the server confirmed about this PC's licence: nothing to renew any more
+const TERMINAL = new Set(['released', 'revoked', 'licenseExpired']);
+// states in which a renewal can't help or can't be judged (the clock, another PC, a broken file)
+const NO_RENEWAL = new Set(['none', 'clock', 'otherMachine', 'invalid', 'unsupported', ...TERMINAL]);
+
+// Timers that never keep the process alive (Tune quits when its window closes).
+const realTimers = {
+  set: (fn, ms) => { const h = setTimeout(fn, ms); if (h && typeof h.unref === 'function') h.unref(); return h; },
+  clear: (h) => clearTimeout(h),
+};
 
 const ID = /^[a-z]{3,4}_[0-9a-f]{24}$/;
 const num = (v) => (Number.isFinite(v) ? v : null);
 
-function createLicensingClient({ config, api, store, machineId, now = Date.now, newRequestKey = () => crypto.randomBytes(18).toString('base64url') }) {
+// timers: { set(fn, ms), clear(handle) } (injected in tests); onChange: told when the licence changed
+// without the window asking (a background renewal, a release seen in the background).
+function createLicensingClient({ config, api, store, machineId, now = Date.now, newRequestKey = () => crypto.randomBytes(18).toString('base64url'), timers = realTimers, onChange = () => {} }) {
   let loaded = false;
   let saved = null; // the decrypted file: { v: 1, device, license, lastSeenAt }
   let storage = 'ok'; // 'ok' | 'unavailable' | 'unreadable' | 'failed'
@@ -44,6 +66,12 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
   let busy = false;
   let lastSeenWritten = 0;
   let lastCheckFailedAt = null;
+  // background renewal
+  let timer = null;
+  let disposed = false;
+  let renewing = null; // the renewal in flight (a promise of its outcome)
+  let retryDelay = 0;
+  let retryAt = null;
 
   function load() {
     if (loaded) return;
@@ -138,18 +166,24 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
   }
   const answer = () => ({ ok: true, data: summary() });
 
-  // One request at a time; whatever happens, the busy flag is cleared and an answer comes back.
+  // One request at a time; whatever happens, the busy flag is cleared and an answer comes back. A
+  // background renewal in flight is waited for first: "Check now" takes its answer instead of sending
+  // a second request, and any other action starts after it. Afterwards renewal is planned again (an
+  // activation starts it, a confirmed release stops it).
   async function run(action, fn) {
     if (busy) { return { ok: true, data: { ...summary(), outcome: { action, result: 'busy' } } }; }
     busy = true;
     try {
       load();
       if (!api) { outcome = { action, result: 'notConfigured' }; return answer(); }
-      await fn();
+      const joined = renewing ? await renewing.catch(() => null) : null;
+      if (action === 'refresh' && joined) outcome = { ...joined, action: 'refresh' };
+      else await fn();
     } catch {
       outcome = { action, result: 'failed' };
     } finally {
       busy = false;
+      schedule();
     }
     return answer();
   }
@@ -192,6 +226,13 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
       saved = { ...saved, license: { ...saved.license, serverStatus: r.status === 'revoked' ? 'revoked' : 'expired', lastCheckAt: now() } };
       write(saved);
     }
+    // the server confirms this PC's seat was released (the owner moved the licence): this binding is
+    // released (kept, protected, until a recovery the server approves); the licence itself and any
+    // other PC are untouched. Without this answer (offline) nothing changes here.
+    if (r.result === 'device_released' && saved && saved.license && action === 'refresh') {
+      saved = { ...saved, license: { ...saved.license, serverStatus: 'released', releasedAt: now(), lastCheckAt: now() } };
+      write(saved);
+    }
     outcome = o;
   }
 
@@ -209,22 +250,25 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
     saved = { ...saved, v: 1, license, lastSeenAt: Math.max(at, c.payload.issuedAt) };
     lastSeenWritten = at;
     lastCheckFailedAt = null;
+    retryDelay = 0;
+    retryAt = null;
     flow = { ...flow, choices: null };
     const w = write(saved);
     const done = { activate: 'activated', recover: 'recovered', refresh: 'refreshed' }[action];
     outcome = w.ok ? { action, result: r.replayed ? 'activated' : done } : { action, result: 'storageFailed' };
   }
 
-  // Send, or (retry) send again exactly what was sent before.
-  async function send(action, route, body, dev) {
+  // Send, or (retry) send again exactly what was sent before. A background renewal leaves the person's
+  // own unanswered request (and its Try again) alone.
+  async function send(action, route, body, dev, { background = false } = {}) {
     const r = await api.post(route, body);
     if (r.result === 'unavailable') {
-      pending = { action, route, body };
+      if (!background) pending = { action, route, body };
       if (action === 'refresh') lastCheckFailedAt = now();
       noAnswer(action, r);
       return;
     }
-    pending = null;
+    if (!background) pending = null;
     if (r.result !== 'ok') { refusal(action, r); return; }
     if (route === 'challenge') {
       flow = { ...flow, challengeId: typeof r.challengeId === 'string' ? r.challengeId : null, ownerToken: null };
@@ -280,7 +324,7 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
   });
 
   // A check with the server, signed with this install's key (it renews the certificate).
-  async function refreshNow() {
+  async function refreshNow({ background = false } = {}) {
     const lic = saved && saved.license;
     const key = saved && deviceKeyFrom(saved.device);
     if (!lic || !key) { outcome = { action: 'refresh', result: 'noLicense' }; return; }
@@ -288,7 +332,7 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
     if (!m.ok) { outcome = { action: 'refresh', result: 'identityUnavailable' }; return; }
     const body = { licenseId: lic.licenseId, deviceId: lic.deviceId, machineId: m.machineId };
     const { ts, signature } = signRequest('refresh', body, key.privateKey, now());
-    await send('refresh', 'refresh', { ...body, ts, signature }, { key, machineId: m.machineId });
+    await send('refresh', 'refresh', { ...body, ts, signature }, { key, machineId: m.machineId }, { background });
   }
   const refresh = () => run('refresh', refreshNow);
 
@@ -322,21 +366,96 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
     return answer();
   }
 
-  // At start: read what is stored, and renew in the background when it is due. Never throws.
+  // ---- renewal while Tune runs ----
+
+  // Whether there is a licence to renew at all: licensing on, a licence and this install's key, and
+  // nothing the server confirmed as final. An expired certificate is renewed (after an outage).
+  function renewable(j) {
+    const lic = saved && saved.license;
+    return !!api && !!lic && !!deviceKeyFrom(saved.device) && !NO_RENEWAL.has(j.state);
+  }
+
+  // When the next renewal is due: after a failure, when its backoff ends; otherwise 12 hours after the
+  // last check, or 2 days before the certificate ends, whichever is first.
+  function dueAt(j) {
+    if (retryAt != null) return retryAt;
+    const lic = saved.license;
+    const after = Number.isFinite(lic.lastCheckAt) ? lic.lastCheckAt + REFRESH_AFTER_MS : now();
+    const before = j.payload && Number.isFinite(j.payload.expiresAt) ? j.payload.expiresAt - REFRESH_BEFORE_END_MS : now();
+    return Math.min(after, before);
+  }
+
+  // Plan the next look: none without a licence that could ever renew; otherwise at the due time, but
+  // never more than LOOK_EVERY_MS away, so a missed timer (sleep) or a clock change is seen soon.
+  function schedule() {
+    if (timer) { timers.clear(timer); timer = null; }
+    if (disposed || !api || !(saved && saved.license)) return;
+    const j = judge();
+    if (TERMINAL.has(j.state)) return;
+    const wait = renewable(j) ? Math.max(0, dueAt(j) - now()) : LOOK_EVERY_MS;
+    timer = timers.set(() => tick(), Math.min(wait, LOOK_EVERY_MS));
+  }
+
+  // A look at the licence with the clock as it is now: note the time (a clock set back is noticed),
+  // renew when due, tell the window when something changed, and plan the next look.
+  async function tick() {
+    timer = null;
+    // a renewal already in flight (a resume and an unlock arrive together) plans the next look itself
+    if (disposed || renewing) return;
+    try {
+      load();
+      const before = judge().state;
+      touchClock();
+      const j = judge();
+      if (renewable(j) && now() >= dueAt(j)) await renewInBackground();
+      else if (j.state !== before) onChange();
+    } catch { /* a look never throws; the next one tries again */ }
+    schedule();
+  }
+
+  // A renewal nobody asked for: no message for the window (the row shows its result), no effect on
+  // the person's own pending request, and not while the person's own request runs.
+  async function renewInBackground() {
+    if (busy) { retryAt = now() + RETRY_FIRST_MS; return; }
+    renewing = (async () => {
+      const shown = outcome;
+      try {
+        await refreshNow({ background: true });
+        return outcome;
+      } finally {
+        outcome = shown;
+      }
+    })();
+    let result = null;
+    try { result = await renewing; } catch { result = { action: 'refresh', result: 'failed' }; } finally { renewing = null; }
+    if (result && (result.result === 'unavailable' || result.result === 'failed')) {
+      retryDelay = retryDelay ? Math.min(retryDelay * 2, RETRY_MAX_MS) : RETRY_FIRST_MS;
+      retryAt = now() + retryDelay;
+    } else {
+      retryDelay = 0;
+      retryAt = null;
+    }
+    onChange();
+  }
+
+  // The PC woke up (or the clock changed a lot): look again now instead of waiting for a timer.
+  async function wake() {
+    if (disposed) return;
+    if (timer) { timers.clear(timer); timer = null; }
+    await tick();
+  }
+
+  // Tune is quitting: no more timers.
+  function dispose() {
+    disposed = true;
+    if (timer) { timers.clear(timer); timer = null; }
+  }
+
+  // At start: read what is stored, renew when due, and keep renewing while Tune runs. Never throws.
   async function init() {
     try {
       await status();
-      const lic = saved && saved.license;
-      if (!api || !lic || busy) return;
-      const j = judge();
-      const due = !Number.isFinite(lic.lastCheckAt) || now() - lic.lastCheckAt > REFRESH_AFTER_MS
-        || (j.payload && j.payload.expiresAt - now() < REFRESH_BEFORE_END_MS) || j.state === 'expired';
-      if (due && !['clock', 'otherMachine', 'invalid'].includes(j.state)) {
-        const before = outcome;
-        await refresh();
-        // a background renewal doesn't leave a message for the window; its time shows in the status
-        outcome = before;
-      }
+      await tick();
     } catch { /* licensing never stops Tune from starting */ }
   }
 
@@ -346,7 +465,7 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
     return { state: j.state, features: j.payload && j.state === 'active' ? j.payload.features : [] };
   };
 
-  return { init, status, startOwner, confirmOwner, activate, recover, refresh, retry, reset, current };
+  return { init, status, startOwner, confirmOwner, activate, recover, refresh, retry, reset, current, wake, dispose };
 }
 
-module.exports = { createLicensingClient, REFRESH_AFTER_MS, REFRESH_BEFORE_END_MS };
+module.exports = { createLicensingClient, realTimers, REFRESH_AFTER_MS, REFRESH_BEFORE_END_MS, RETRY_MAX_MS, LOOK_EVERY_MS };

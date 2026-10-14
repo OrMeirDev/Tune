@@ -10,54 +10,14 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const http = require('node:http');
-const { setup, clock, pc, reinstall, MINUTE, DAY } = require('../licensing/tests/helpers.cjs');
-const { start } = require('../licensing/server.cjs');
+const { clock, pc, reinstall, MINUTE, DAY } = require('../licensing/tests/helpers.cjs');
 const { createApi } = require('../electron/licensing/api.cjs');
 const { createLicensingClient } = require('../electron/licensing/client.cjs');
 const { createProtectedStore, MAGIC } = require('../electron/licensing/protected-store.cjs');
 const { createEntitlements } = require('../electron/licensing/entitlements.cjs');
 const { licensingConfig, serverUrl } = require('../electron/licensing/config.cjs');
 
-// A stand-in for DPAPI: reversible, switchable off, and able to fail a write like a full disk.
-function fakeCrypt() {
-  const c = { kind: 'dpapi', on: true, failWrites: false };
-  c.available = () => c.on;
-  c.encrypt = (s) => { if (c.failWrites) throw new Error('disk full'); return Buffer.from(Buffer.from(s, 'utf8').map((x) => x ^ 0x33)); };
-  c.decrypt = (b) => Buffer.from(b.map((x) => x ^ 0x33)).toString('utf8');
-  return c;
-}
-
-// The licensing server on a loopback port, and what a test needs to drive it.
-async function server(t, opts = {}) {
-  const now = opts.now || clock();
-  const env = setup(t, { now });
-  const http0 = await start({ service: env.service, adminToken: env.keys.adminToken, log: () => {} });
-  t.after(() => http0.close());
-  // the customer reads the 6-digit code from their mail (the PoC's outbox)
-  const mailCode = (email) => /\b(\d{6})\b/.exec(env.store.readOutbox(email).at(-1).body)[1];
-  return { ...env, url: http0.url, now, mailCode, publicKey: crypto.createPublicKey(env.service.publicKey) };
-}
-
-// Tune on one PC: a profile folder, its machine id, its protected storage.
-function tune(t, srv, { machine = pc('pc-a'), dir, crypt = fakeCrypt(), fetch = globalThis.fetch, timeoutMs = 3000, now = srv.now } = {}) {
-  const profile = dir || fs.mkdtempSync(path.join(os.tmpdir(), 'tune-profile-'));
-  if (!dir) t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
-  const config = { url: srv.url, publicKey: srv.publicKey, problem: null, development: true };
-  const store = createProtectedStore({ file: path.join(profile, 'license.bin'), crypt });
-  const client = createLicensingClient({ config, api: createApi({ baseUrl: srv.url, fetch, timeoutMs }), store, machineId: async () => ({ ok: true, machineId: machine.machineId }), now });
-  return { client, profile, crypt, machine, file: path.join(profile, 'license.bin') };
-}
-
-// Owner verification the way a customer does it: email, then the code from the mail.
-async function verifiedOwner(srv, app, email = 'owner@example.com') {
-  assert.equal((await app.client.startOwner(email)).data.outcome.result, 'codeSent');
-  const r = await app.client.confirmOwner(srv.mailCode(email));
-  assert.equal(r.data.outcome.result, 'ownerVerified');
-  return r;
-}
-
-const code = (srv, opts) => srv.order(opts).units[0].code;
-const outcome = (r) => r.data.outcome.result;
+const { fakeCrypt, server, tune, verifiedOwner, code, outcome } = require('./licensing-app.cjs');
 
 test('activation: verified owner, a Serial, a licence stored only under protection', async (t) => {
   const srv = await server(t);

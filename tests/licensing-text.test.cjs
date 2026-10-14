@@ -16,7 +16,7 @@ test('every outcome and licence state the client can produce has words in Englis
   const states = new Set([...src('license-state.cjs').matchAll(/state: '([a-zA-Z]+)'/g)].map((m) => m[1]));
   for (const s of ['clock', 'expired', 'otherMachine', 'invalid']) states.add(s);
   // names that are other fields, not results
-  for (const notResult of ['activate', 'recover', 'refresh', 'retry', 'reset', 'ownerStart', 'ownerConfirm', 'email', 'code', 'ready', 'ok', 'revoked', 'expired', 'active', 'challenge', 'verify', 'redeem', 'unreadable', 'failed', 'unavailable']) results.delete(notResult);
+  for (const notResult of ['activate', 'recover', 'refresh', 'retry', 'reset', 'ownerStart', 'ownerConfirm', 'email', 'code', 'ready', 'ok', 'revoked', 'expired', 'released', 'active', 'challenge', 'verify', 'redeem', 'unreadable', 'failed', 'unavailable']) results.delete(notResult);
   results.add('failed'); results.add('unavailable');
   for (const lang of ['en', 'he']) {
     for (const r of results) assert.ok(STRINGS[lang][`lic.o.${r}`], `${lang}: lic.o.${r}`);
