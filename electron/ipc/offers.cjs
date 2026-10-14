@@ -18,7 +18,12 @@ function createOffers() {
     // remember a scan's result: a success replaces the last and makes it actionable; a failure
     // keeps the last for viewing and marks it out of date
     remember(kind, r) {
-      if (r && r.ok) { last[kind] = r.data; stale[kind] = false; } else stale[kind] = true;
+      if (r && r.ok) { last[kind] = r.data; stale[kind] = false; } else {
+        stale[kind] = true;
+        // the GPU driver and BIOS offers were found for the hardware the last scan saw; when the
+        // hardware scan fails they wait too, until their own checks succeed again
+        if (kind === 'hw') { stale.gpu = true; stale.bios = true; }
+      }
       return r;
     },
     has: (kind) => last[kind] != null,

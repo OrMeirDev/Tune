@@ -130,3 +130,36 @@ test('R5: after a failed refresh, the old offers can be seen but not acted on', 
     assert.deepEqual(ask(), { ok: false, error: STALE }, kind);
   }
 });
+
+test('R2 follow-up: an ASUS answer with the wrong shape is a failure, not "unsupported"', async () => {
+  const { sourcesFrom, scanVerdict } = await verdict();
+  const { biosCheck } = require('../electron/features/bios.cjs');
+  const board = { maker: 'ASUSTeK COMPUTER INC.', model: 'PRIME Z790-P WIFI', version: '1836' };
+  for (const [name, body] of [
+    ['Obj is an object', { Status: 'SUCCESS', Result: { Obj: {} } }],
+    ['Obj is a string', { Status: 'SUCCESS', Result: { Obj: 'x' } }],
+    ['BIOS files not a list', { Status: 'SUCCESS', Result: { Obj: [{ Name: 'BIOS', Files: {} }] } }],
+  ]) {
+    const r = await withFetch(async () => reply(body, { json: true }), () => biosCheck(board));
+    assert.equal(r.ok, false, name);
+    assert.equal(scanVerdict({ running: false, total: 0, sources: sourcesFrom({ hw: HW, wu: OK, gpu: OK, bios: r }) }).state, 'incomplete', name);
+  }
+});
+
+test('R5 follow-up: a failed hardware scan also stops the GPU driver and BIOS offers', () => {
+  const { createOffers, STALE } = require('../electron/ipc/offers.cjs');
+  const o = createOffers();
+  o.remember('hw', { ok: true, data: { gpus: [{ name: 'AMD Radeon RX 7900 XTX' }] } });
+  o.remember('gpu', { ok: true, data: [{ status: 'ok', gpu: 'AMD Radeon RX 7900 XTX', newer: true, url: 'https://drivers.amd.com/x.exe' }] });
+  o.remember('bios', { ok: true, data: { supported: true, newer: true, latest: { url: 'https://dlcdnets.asus.com/b.zip' } } });
+  assert.equal(o.gpuDriver('AMD Radeon RX 7900 XTX').ok, true);
+  assert.equal(o.bios().ok, true);
+  o.remember('hw', { ok: false, error: 'hardware scan failed' });
+  assert.deepEqual(o.gpuDriver('AMD Radeon RX 7900 XTX'), { ok: false, error: STALE });
+  assert.deepEqual(o.bios(), { ok: false, error: STALE });
+  // a successful hardware scan alone doesn't revive them; their own checks must succeed again
+  o.remember('hw', { ok: true, data: { gpus: [] } });
+  assert.deepEqual(o.bios(), { ok: false, error: STALE });
+  o.remember('bios', { ok: true, data: { supported: true, newer: true, latest: { url: 'https://dlcdnets.asus.com/b.zip' } } });
+  assert.equal(o.bios().ok, true);
+});

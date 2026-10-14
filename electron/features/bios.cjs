@@ -71,8 +71,14 @@ async function asusBiosFiles(model) {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = await r.json();
       if (!j || String(j.Status).toUpperCase() === 'FAIL' || j.Result == null) throw new Error(`ASUS answered ${j?.Status || 'nothing'}`);
+      // the answer counts only if it has the expected shape: a list of groups, and the BIOS group's
+      // files (if there is one) a list too; anything else is a broken answer, not "no BIOS files"
+      const groups = j.Result.Obj;
+      if (!Array.isArray(groups)) throw new Error('ASUS answer has an unexpected shape');
+      const group = groups.find((o) => o && o.Name === 'BIOS');
+      if (group && !Array.isArray(group.Files)) throw new Error('ASUS answer has an unexpected shape');
       answered = true;
-      const files = (j.Result.Obj || []).find((o) => o.Name === 'BIOS')?.Files || [];
+      const files = group ? group.Files : [];
       if (files.length) return files;
     } catch (e) { failures.push(String(e.message || e)); /* try the next one */ }
   }
