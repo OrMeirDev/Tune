@@ -21,7 +21,7 @@ Hebrew (RTL).
 | --- | --- | --- |
 | `App.jsx` | App shell: state, scan orchestration, navigation | everything below |
 | `app/` | pages and sidebar groups | – |
-| `features/<area>/` | one area's page and its parts (updates, hardware, diagnose, overview, cleanup, startup, performance, sensors, diagnostics, guides, bios, history, settings) | `components/`, `presentation/`, `domain/`, `api.js`, `i18n.js`, non-page modules of other features |
+| `features/<area>/` | one area's page and its parts (updates, hardware, diagnose, overview, cleanup, startup, performance, sensors, diagnostics, guides, bios, history, license, settings) | `components/`, `presentation/`, `domain/`, `api.js`, `i18n.js`, non-page modules of other features |
 | `components/` | shared presentation (progress, banners, scan result) | `presentation/`, `domain/`, `i18n.js` |
 | `presentation/` | formatting helpers | `i18n.js` |
 | `domain/` | pure rules (no React, no Electron) | `domain/` only |
@@ -39,7 +39,7 @@ a time, progress, the result banner), `app/useCommands.js` (what each button run
 
 | Folder / file | Owns | May require |
 | --- | --- | --- |
-| `main.cjs`, `preload.cjs` | windows, IPC, the bridge | `system.cjs`, `report.cjs`, `oem-bios.cjs`, `measure-store.cjs` |
+| `main.cjs`, `preload.cjs` | windows, IPC, the bridge | `system.cjs`, `report.cjs`, `oem-bios.cjs`, `measure-store.cjs`, `licensing/index.cjs` |
 | `ipc/` | every request from the window: who may send it (`guard.cjs`), its exact arguments and what it runs (`channels.cjs`), and what the main process found itself (`offers.cjs`) | `ipc/` only (operations are injected) |
 | `system.cjs` | facade: the one interface `main.cjs` uses (same exports as before the split) | everything below |
 | `features/` | hardware, drivers, gpu-drivers, bios, cleanup, startup, sensors, measurements, recommendations, restore | `infra/`, `domain/`, `privilege/` |
@@ -47,6 +47,7 @@ a time, progress, the result banner), `app/useCommands.js` (what each button run
 | `privilege/service.cjs`, `privilege/admin-session.cjs` | the LocalSystem service and the UAC admin session that run those operations | `infra/`, `privilege/` |
 | `infra/` | running PowerShell, downloading files | Node only |
 | `domain/` | pure rules: recommendation policy, vendor guidance with sources (`advice-rules.cjs`), version compare, measurements and their comparison (`measurement-policy.cjs`) | `domain/` only |
+| `licensing/` | the licensing client that ships: config, API requests, DPAPI storage, identity and device key, certificate checks and licence state, entitlements, the flows (`client.cjs`); `index.cjs` puts them together for `main.cjs` | `licensing/`, `infra/` (never `features/`, `privilege/`, `ipc/`) |
 
 Also enforced by `tests/architecture.test.cjs`: `domain/` is pure; `infra/` and `privilege/` never
 require `features/`; no require cycles. `report.cjs` (exports), `oem-bios.cjs` (OEM BIOS
@@ -61,17 +62,31 @@ catalogs) and `measure-store.cjs` (the local measurement history) sit next to `m
   an after are compared only when taken the same way (`electron/domain/measurement-policy.cjs`);
   otherwise both are shown and nothing is credited. Monitoring stays read only.
 
-## Licensing (proof of concept)
+## Licensing
 
-`licensing/` is a standalone proof of concept of the licensing server (one-time Serial redemption,
-recovery, signed certificates). It is not part of the Tune build or installer. The plan and the status
-of every task: `docs/roadmap/`.
+- `licensing/` (top level) is the licensing **server** proof of concept. It is never packed into the
+  installer and nothing in `electron/` requires it. What both sides share (certificate format and
+  check, device keys, Serial typing) lives in `electron/licensing/` and the server re-exports it.
+- `electron/licensing/` is the **client** in the main process. Tokens, the device private key and
+  certificates stay there; the window gets summaries through the `license:*` channels.
+- Shipped defaults: no licensing server, entitlement policy `open` (nothing is gated). Don't change
+  them without the owner's commercial decisions (docs/roadmap). `TUNE_*` licensing variables work in
+  unpackaged builds only.
+- Entitlements are enforced in `ipc/channels.cjs` (the gate) before an action runs; never rely on
+  hiding a button. Recovery, exports, history, restore points and settings are never gated. A licence
+  is never a Windows administrator right.
+- Private keys are never stored without DPAPI; a licensing failure never deletes settings, history or
+  the licence file, and never interrupts a running action.
+
+The plan and the status of every task: `docs/roadmap/`.
 
 ## Commands
 
 - `npm test`: unit and architecture tests (`node --test`, no Electron or Windows needed)
 - `npm run build`: renderer build
 - `node --check electron/*.cjs`: main-process syntax
+- `node --test "licensing/**/*.test.cjs"`: the licensing server PoC alone (also part of `npm test`)
+- `npm run e2e:<name>`: the real app with a display (`e2e/README.md`); `e2e:licensing` needs Node 22+ on PATH
 
 ## Safety while developing
 

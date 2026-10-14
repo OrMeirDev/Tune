@@ -19,11 +19,19 @@ decisions (see the end).
 | P06 | Profiles (PF07) | Not started; needs P01, P02 |
 | P07 | Upgrade advice (PF08) | Not started; needs P01, P05 |
 | L00 | Licence policy and choice of service | Open decisions (below) |
-| L01 | Server and one-time redemption | **Proof of concept done**: `licensing/` (not shipped in the installer); run `node --test "licensing/**/*.test.cjs"` |
-| L02 | Activation and recovery inside Tune | Not started; the certificate check it needs is in the PoC |
+| L01 | Server and one-time redemption | **Proof of concept completed**: `licensing/` (not shipped in the installer); run `node --test "licensing/**/*.test.cjs"` |
+| L02 | Activation and recovery inside Tune | **Implemented, Windows validation pending**: main-process client, Settings flow in English and Hebrew, entitlement mechanism (shipped policy: open). Verified off Windows with a DPAPI stand-in; the Windows steps below are not done yet |
 | L03 | Admin and manual sale | Not started (the PoC has the admin issuing call only) |
 | L04 | Automatic payment | Not started; needs a payment provider |
-| L05 | Self-service recovery | Not started |
+| L05 | Self-service recovery | Not started (L02 recovers on the same PC; moving to another PC needs a release, which only the server API offers) |
+
+Separate work, not part of L01 or L02: payment and webhooks (L04), real email delivery (the PoC
+writes owner codes to an outbox table), an admin UI (L03), and production infrastructure (hosting,
+the database, key management, monitoring). No build points customers at the PoC server.
+
+The audit's open findings stay open: TUN-01, TUN-02, TUN-06, TUN-09 and TUN-12
+([`docs/audit/STATUS.md`](../audit/STATUS.md)). Licensing changes none of them: a licence grants no
+Windows administrator rights, and the privileged boundary is unchanged.
 
 ## Step one: what was built
 
@@ -77,6 +85,55 @@ See [`licensing/README.md`](../../licensing/README.md): one-time atomic redempti
 concurrency, idempotent retries, codes stored only as HMAC + suffix, signed certificates, recovery on
 the same PC, device release. Not part of the Tune build.
 
+### L02: activation and recovery in Tune (`electron/licensing/`, `src/features/license/`)
+
+What is implemented and tested off Windows:
+
+- **What ships and what doesn't**: the app's licensing client lives in `electron/licensing/` (packed
+  with the app); it shares the certificate check, device keys and Serial rules with the server PoC,
+  which re-exports them. The server, its database, signing keys, admin token and outbox stay in
+  `licensing/`, outside the installer (architecture tests check both).
+- **Shipped defaults change nothing**: no licensing server is configured and the entitlement policy is
+  `open`, so every feature stays available and Settings says licensing is not open. A development
+  build can point at a local PoC server with `TUNE_LICENSING_URL` and `TUNE_LICENSING_PUBLIC_KEY`
+  (https, or this PC only); a packaged build ignores every `TUNE_*` licensing variable.
+- **Main process only**: networking, the owner token, the pending request, the device private key
+  and certificates never reach the window; eight `license:*` channels take what the person typed or
+  chose (checked shapes) and return summaries.
+- **Requests**: bounded time (connect, wait, read), bounded size, no redirects. No usable answer is
+  "unavailable": nothing is decided, and Try again resends the same request (same Serial, owner,
+  device key and idempotency key), so an activation the server carried out returns its licence.
+- **Storage**: one file encrypted with DPAPI (Electron `safeStorage`); no plaintext fallback (without
+  protection nothing is activated); an unreadable file is kept, never deleted; a failed write leaves
+  the licence valid for the session and Tune usable.
+- **Certificates**: verified against the trusted public key when received and again on every load
+  (signature, format, plan fields, this PC, this install's key, expiry, policy version). An answer
+  that doesn't verify never replaces the stored licence. A valid certificate follows its signed
+  expiry during an outage. A clock earlier than the protected last-seen time is reported as such.
+- **Recovery** brings back the owner's licence on this PC after a reinstall; it never releases
+  another PC, never redeems a Serial and never buys anything; a full licence is reported as full.
+- **Entitlements**: checked in the request layer before any action that uses a feature (drivers,
+  BIOS, cleanup, startup, settings changes); the window's buttons are not the enforcement. Recovery,
+  exports, history, restore points and settings are never gated, and a running action is never
+  interrupted. The `enforce` policy exists for later and for tests; the paid feature list is open.
+- **Tests**: `tests/licensing-client.test.cjs` (19, the client against the PoC over real HTTP),
+  IPC bypass attempts in `tests/ipc.test.cjs`, wording in `tests/licensing-text.test.cjs`,
+  architecture rules; `npm run e2e:licensing` (20 checks, the real app against the PoC, keyboard,
+  Hebrew RTL, an outage and retry).
+
+Pending on Windows 10 and 11 (not done; this environment has no Windows):
+
+1. `npm run e2e:licensing` on each, unpackaged (real DPAPI and the PC's own machine id): all checks
+   pass; `license.bin` in the profile holds no readable key or certificate (search it for
+   `PRIVATE KEY` and `tune-license`).
+2. DPAPI boundaries: copy `license.bin` to another Windows user's profile and start Tune there: the
+   licence shows as unreadable and is kept; recovery works for the owner. Turn the PC's network off:
+   the licence stays active until its certificate's end, and "Check now" says it couldn't connect.
+3. The machine id: `MachineGuid` and the SMBIOS UUID read as a standard user; the same id after a Tune
+   reinstall; recovery after deleting the profile returns the same licence.
+4. A packaged build (`npm run dist` on a disposable VM): Settings says licensing is not open, and
+   setting `TUNE_LICENSING_URL` changes nothing.
+
 ### Known limits of step one
 
 - **Start-up timing may need admin rights.** Windows often keeps the Diagnostics-Performance log to
@@ -92,14 +149,23 @@ the same PC, device release. Not part of the Tune build.
 
 ## Next steps (in the plan's order)
 
-1. Run the step-one checks on a real Windows 10 and 11 PC (`npm run e2e:layout` now includes the new
-   page) and confirm the start-up event fields; decide whether start-up timing should go through the
-   service (needs a service version bump).
+1. On a real Windows 10 and 11 PC (or a disposable VM for anything that changes the PC):
+   - the start-up collector: run Tune as a standard user and as an administrator; confirm event 100's
+     fields (`BootStartTime`, `MainPathBootTime`, `BootPostBootTime`) and event 27's boot type are
+     read, that a standard user who is refused gets "not checked" (not "OK"), that two starts close
+     together each get their own kind (a restart right after a Fast Startup start), and that a startup
+     change followed by another Windows change before the next start shows "not comparable";
+   - `npm run e2e:layout` (it includes the Fix a problem page), knowing it checks layout only, not
+     that start-up collection works (it passed on Linux on 2026-10-14, 20 checks, with every Windows
+     scan failing there; the Windows run is still to do);
+   - the L02 steps above; then decide whether start-up timing should go through the service (needs a
+     service version bump).
 2. **P02 / PF03**: per-entry startup impact (measured vs estimated), delayed start for supported entry
    types with undo, protected categories (security, accessibility, backup, sync) never get a blanket
    "turn off".
-3. **L00**: the open decisions below; then **L02** (activation screen in Hebrew and English, licence
-   module in the main process using the PoC's certificate check, offline window).
+3. **L00**: the open decisions below. L02's mechanism is in place; turning licensing on for customers
+   needs a real licensing service, its public key in `electron/licensing/config.cjs`, and a policy
+   other than `open`, all after the owner decides.
 4. **L03**: admin panel and a manual first sale; then the trial-sale exit criteria from the plan.
 
 ## Open decisions (needed before the first sale)
@@ -113,3 +179,6 @@ the same PC, device release. Not part of the Tune build.
 | Updates and validity | included versions, major upgrades, renewal; usage validity separate from update entitlement |
 | Purchase and support | payment provider, ownership binding, delivery, refunds, recovery path |
 | Licensing service | a service such as Keygen behind a small adapter vs an own server (cost, data export, one-time redemption support) |
+
+Known, not from this work: on the Settings page the background-service note is wider than the card
+at 1347 px (a horizontal scrollbar in the card); it is the same in 1.3.1.
