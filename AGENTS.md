@@ -21,7 +21,7 @@ Hebrew (RTL).
 | --- | --- | --- |
 | `App.jsx` | App shell: state, scan orchestration, navigation | everything below |
 | `app/` | pages and sidebar groups | – |
-| `features/<area>/` | one area's page and its parts (updates, hardware, overview, cleanup, startup, performance, sensors, diagnostics, guides, bios, history, settings) | `components/`, `presentation/`, `domain/`, `api.js`, `i18n.js`, non-page modules of other features |
+| `features/<area>/` | one area's page and its parts (updates, hardware, diagnose, overview, cleanup, startup, performance, sensors, diagnostics, guides, bios, history, settings) | `components/`, `presentation/`, `domain/`, `api.js`, `i18n.js`, non-page modules of other features |
 | `components/` | shared presentation (progress, banners, scan result) | `presentation/`, `domain/`, `i18n.js` |
 | `presentation/` | formatting helpers | `i18n.js` |
 | `domain/` | pure rules (no React, no Electron) | `domain/` only |
@@ -39,18 +39,33 @@ a time, progress, the result banner), `app/useCommands.js` (what each button run
 
 | Folder / file | Owns | May require |
 | --- | --- | --- |
-| `main.cjs`, `preload.cjs` | windows, IPC, the bridge | `system.cjs`, `report.cjs`, `oem-bios.cjs` |
+| `main.cjs`, `preload.cjs` | windows, IPC, the bridge | `system.cjs`, `report.cjs`, `oem-bios.cjs`, `measure-store.cjs` |
 | `ipc/` | every request from the window: who may send it (`guard.cjs`), its exact arguments and what it runs (`channels.cjs`), and what the main process found itself (`offers.cjs`) | `ipc/` only (operations are injected) |
 | `system.cjs` | facade: the one interface `main.cjs` uses (same exports as before the split) | everything below |
-| `features/` | hardware, drivers, gpu-drivers, bios, cleanup, startup, sensors, recommendations, restore | `infra/`, `domain/`, `privilege/` |
+| `features/` | hardware, drivers, gpu-drivers, bios, cleanup, startup, sensors, measurements, recommendations, restore | `infra/`, `domain/`, `privilege/` |
 | `privilege/operations.cjs` | the fixed admin operations (PowerShell bodies) — the only code ever elevated | – |
 | `privilege/service.cjs`, `privilege/admin-session.cjs` | the LocalSystem service and the UAC admin session that run those operations | `infra/`, `privilege/` |
 | `infra/` | running PowerShell, downloading files | Node only |
-| `domain/` | pure rules: recommendation policy, vendor guidance with sources (`advice-rules.cjs`), version compare | `domain/` only |
+| `domain/` | pure rules: recommendation policy, vendor guidance with sources (`advice-rules.cjs`), version compare, measurements and their comparison (`measurement-policy.cjs`) | `domain/` only |
 
 Also enforced by `tests/architecture.test.cjs`: `domain/` is pure; `infra/` and `privilege/` never
-require `features/`; no require cycles. `report.cjs` (exports) and `oem-bios.cjs` (OEM BIOS
-catalogs) sit next to `main.cjs`.
+require `features/`; no require cycles. `report.cjs` (exports), `oem-bios.cjs` (OEM BIOS
+catalogs) and `measure-store.cjs` (the local measurement history) sit next to `main.cjs`.
+
+## Diagnosis and measurements
+
+- The "fix a problem" page (`src/features/diagnose/`) judges with `src/domain/diagnosis.mjs`: a cause
+  is "possible", a reading is "measured", a check that couldn't run is "not checked"; never "solved"
+  while a check is missing.
+- Measurements are taken by the main process itself (`measure:take` names only the kind). A before and
+  an after are compared only when taken the same way (`electron/domain/measurement-policy.cjs`);
+  otherwise both are shown and nothing is credited. Monitoring stays read only.
+
+## Licensing (proof of concept)
+
+`licensing/` is a standalone proof of concept of the licensing server (one-time Serial redemption,
+recovery, signed certificates). It is not part of the Tune build or installer. The plan and the status
+of every task: `docs/roadmap/`.
 
 ## Commands
 
@@ -66,6 +81,7 @@ catalogs) sit next to `main.cjs`.
   `version` and `sensors` requests.
 - Publishing a release needs the owner's explicit go-ahead.
 
-## Audit
+## Audit and roadmap
 
-The 2026-10-14 audit's findings and their status: `docs/audit/`.
+The 2026-10-14 audit's findings and their status: `docs/audit/`. The product and licensing plan's
+tasks and their status: `docs/roadmap/`.
