@@ -5,8 +5,12 @@ license, and the license can be recovered on the same PC.** Node 22, CommonJS, n
 dependencies (`node:crypto`, `node:sqlite`, `node:http`, `node:test`).
 
 This folder is **not shipped inside the Tune installer**: electron-builder packs only `dist/**`,
-`electron/**` and `package.json`. Only `certificate.cjs` and `device.cjs` are meant to move into
-Tune's main process later; both depend on `node:crypto` alone.
+`electron/**` and `package.json`. The pieces both sides need live in the app's packaged client
+folder, `electron/licensing/`: the certificate format and check (`certificate.cjs`), device keys and
+signed requests (`device-keys.cjs`) and how a Serial is typed (`serial.cjs`). They need only
+`node:crypto`; this folder's `certificate.cjs` and `device.cjs` are one-line re-exports of them, and
+`codes.cjs` takes its typing rules from `serial.cjs`, so the server and the app can't drift apart.
+Nothing here (database, signing keys, admin token, outbox) is in the app.
 
 ## Run
 
@@ -42,7 +46,7 @@ folder and are for development only.
 | Refresh needs a request signed by the device's private key, with a recent timestamp that is newer than the last one used. Unsigned, wrongly signed, stale or replayed requests are refused, as is a refresh for a revoked or expired license. | LC11 | `devices.test.cjs` |
 | Reinstall on the same PC (verified owner, same machine id, new device key) gets the same license and a certificate for the new key. No new license is created, the code is unchanged, and the old install's key stops working. | LC09 | `devices.test.cjs` |
 | Another PC on a 1-device plan gets `device_limit` until the verified owner releases the old device. Then the new PC gets the same license, and the code stays `redeemed`. | LC09 | `devices.test.cjs` |
-| `certificate.cjs`/`device.cjs` need only `node:crypto`; only `store.cjs` touches the database. | | `layout.test.cjs` |
+| The shared client modules in `electron/licensing/` need only `node:crypto`, and this folder only re-exports them; only `store.cjs` touches the database. | | `layout.test.cjs` |
 
 Plan IDs not named above (LC02, LC03, LC10, LC12, LC14) were not part of this step's brief and are
 not mapped here.
@@ -56,9 +60,9 @@ decision.
 
 | File | Role |
 | --- | --- |
-| `codes.cjs` | generate, normalize, format, HMAC, suffix, and a log guard that masks anything code-shaped |
-| `certificate.cjs` | canonical JSON, `sign`, `verify(cert, serverPublicKey, { now, machineId, devicePublicKey, skewMs })` returning `{ ok, reason }` (reasons: `malformed`, `signature`, `clock`, `expired`, `machine`, `device`) |
-| `device.cjs` | the PC's side: device key pair, machine id (hash of MachineGuid + SMBIOS UUID), signing requests |
+| `codes.cjs` | generate, HMAC, and a log guard that masks anything code-shaped; normalize, format and suffix come from `electron/licensing/serial.cjs` |
+| `certificate.cjs` | re-exports `electron/licensing/certificate.cjs`: canonical JSON, `sign`, `verify(cert, serverPublicKey, { now, machineId, devicePublicKey, skewMs })` returning `{ ok, reason }` (reasons: `malformed`, `signature`, `clock`, `expired`, `machine`, `device`) |
+| `device.cjs` | re-exports `electron/licensing/device-keys.cjs`: the PC's side: device key pair, machine id (hash of MachineGuid + SMBIOS UUID), signing requests |
 | `store.cjs` | SQLite schema and every query (WAL, `busy_timeout`, foreign keys, triggers) |
 | `service.cjs` | the rules; each call returns `{ result: 'ok', ... }` or `{ result: '<reason>', ... }` |
 | `server.cjs` | the HTTP API, admin token check, request log, dev server entry point |

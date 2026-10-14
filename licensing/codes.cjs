@@ -4,10 +4,8 @@
 // support can talk about); the full code never reaches the database, the events or the logs.
 const crypto = require('node:crypto');
 
-// Crockford Base32: no I, L, O or U, so a code read aloud or retyped from paper survives.
-const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
-const LENGTH = 32;
-const NORMALIZED = /^[0-9A-HJKMNP-TV-Z]{32}$/;
+// How a Serial is written (alphabet, typing rules, groups) is shared with the app.
+const { ALPHABET, LENGTH, normalize, format, suffix } = require('../electron/licensing/serial.cjs');
 
 // 20 random bytes are exactly 160 bits = 32 symbols of 5 bits, so every symbol is uniform (no
 // modulo bias). `random` is injectable only so a test can check the bit packing.
@@ -28,17 +26,7 @@ function generate(random = crypto.randomBytes) {
   return out;
 }
 
-// What a person typed -> the canonical code, or null. Case, spaces and dashes don't matter, and the
-// letters people confuse with digits map to them (O -> 0, I and L -> 1), as Crockford intends.
-function normalize(input) {
-  if (typeof input !== 'string' || input.length > 64) return null;
-  const s = input.toUpperCase().replace(/[\s-]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
-  return NORMALIZED.test(s) ? s : null;
-}
-
-const format = (code) => code.match(/.{4}/g).join('-');
 const hmac = (secret, code) => crypto.createHmac('sha256', secret).update(code, 'ascii').digest('hex');
-const suffix = (code) => code.slice(-4);
 
 // Last line of defence for log output: anything shaped like a code (grouped or not) is masked.
 // Nothing should ever pass a code to a logger; this catches the mistake if something does.
