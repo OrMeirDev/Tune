@@ -643,3 +643,11 @@ html[dir=ltr] .path-text { text-align: left; }
 .lic-done { display: flex; gap: 12px; align-items: flex-start; color: var(--text); }
 .lic-done > svg { color: var(--accent); flex-shrink: 0; margin-top: 2px; }
 .lic-done b { display: block; margin-bottom: 4px; }
+
+/* Settings rows: the text takes the room the controls leave and wraps, the controls keep their
+   size. The shared theme keeps .row-meta on one line (for list rows); in Settings a note is a
+   sentence, so it wraps instead of pushing the row (and the card) sideways. A long folder path
+   breaks anywhere rather than overflow. */
+.setting > :first-child { flex: 1 1 auto; min-width: 0; }
+.setting > :not(:first-child) { flex-shrink: 0; }
+.settings .row-meta { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }
