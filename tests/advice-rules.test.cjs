@@ -1,7 +1,7 @@
 // The 13th–14th gen Intel microcode rule (audit TUN-04): affected desktop chips need 0x12F or later.
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { microcodeAdvice, MICROCODE_RULE } = require('../electron/advice-rules.cjs');
+const { microcodeAdvice, MICROCODE_RULE } = require('../electron/domain/advice-rules.cjs');
 
 const K14 = 'Intel(R) Core(TM) i7-14700K';
 const K13 = 'Intel(R) Core(TM) i9-13900K';

@@ -28,9 +28,25 @@ Rules, enforced by `tests/architecture.test.cjs`: only `main.jsx` imports `App.j
 pure; `components/` and `presentation/` never import `features/` or the shell; a feature never imports
 another feature's page; the renderer never imports Node/Electron modules; no import cycles.
 
-Main process (`electron/`): `main.cjs` (windows, IPC), `system.cjs` (Windows operations),
-`advice-rules.cjs` (pure vendor-guidance rules with source and review date), `report.cjs` (exports),
-`oem-bios.cjs` (OEM BIOS catalogs).
+The shell's state lives in hooks: `app/useScanResults.js` (scan results, full and drivers-only
+scans, the last launch's cache, whether each check answered), `app/useOperations.js` (one action at
+a time, progress, the result banner), `app/useCommands.js` (what each button runs).
+
+## Structure (main process, `electron/`)
+
+| Folder / file | Owns | May require |
+| --- | --- | --- |
+| `main.cjs`, `preload.cjs` | windows, IPC, the bridge | `system.cjs`, `report.cjs`, `oem-bios.cjs` |
+| `system.cjs` | facade: the one interface `main.cjs` uses (same exports as before the split) | everything below |
+| `features/` | hardware, drivers, gpu-drivers, bios, cleanup, startup, sensors, recommendations, restore | `infra/`, `domain/`, `privilege/` |
+| `privilege/operations.cjs` | the fixed admin operations (PowerShell bodies) — the only code ever elevated | – |
+| `privilege/service.cjs`, `privilege/admin-session.cjs` | the LocalSystem service and the UAC admin session that run those operations | `infra/`, `privilege/` |
+| `infra/` | running PowerShell, downloading files | Node only |
+| `domain/` | pure rules: recommendation policy, vendor guidance with sources (`advice-rules.cjs`), version compare | `domain/` only |
+
+Also enforced by `tests/architecture.test.cjs`: `domain/` is pure; `infra/` and `privilege/` never
+require `features/`; no require cycles. `report.cjs` (exports) and `oem-bios.cjs` (OEM BIOS
+catalogs) sit next to `main.cjs`.
 
 ## Commands
 

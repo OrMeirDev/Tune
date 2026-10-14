@@ -73,3 +73,47 @@ test('no import cycles', () => {
   };
   for (const f of graph.keys()) visit(f, []);
 });
+
+// ---- the main process (electron/) ----
+// - domain/ is pure: requires only other domain modules (no Node, Electron or Windows calls);
+// - infra/ (PowerShell, downloads) knows nothing of features or privileges;
+// - privilege/ (service, admin session, the fixed operations) never requires features;
+// - no require cycles.
+const EL = path.join(__dirname, '..', 'electron');
+const elFiles = [];
+(function walk(d) {
+  for (const f of fs.readdirSync(d)) {
+    const p = path.join(d, f);
+    if (fs.statSync(p).isDirectory()) walk(p);
+    else if (f.endsWith('.cjs')) elFiles.push(p);
+  }
+})(EL);
+const elRel = (p) => path.relative(EL, p).split(path.sep).join('/');
+const elGraph = new Map(elFiles.map((f) => {
+  const specs = [...fs.readFileSync(f, 'utf8').matchAll(/require\(['"]([^'"]+)['"]\)/g)].map((m) => m[1]);
+  return [elRel(f), specs.map((s) => (s.startsWith('.') ? elRel(path.resolve(path.dirname(f), s)) : s))];
+}));
+
+test('main-process domain modules are pure', () => {
+  for (const [f, deps] of elGraph) if (f.startsWith('domain/')) for (const d of deps) assert.ok(d.startsWith('domain/'), `${f} requires ${d}`);
+});
+
+test('infra and privilege layers never require features', () => {
+  for (const [f, deps] of elGraph) {
+    if (!/^(infra|privilege)\//.test(f)) continue;
+    for (const d of deps) assert.ok(!d.startsWith('features/'), `${f} requires ${d}`);
+    if (f.startsWith('infra/')) for (const d of deps) assert.ok(!d.startsWith('privilege/'), `${f} requires ${d}`);
+  }
+});
+
+test('no require cycles in the main process', () => {
+  const state = new Map();
+  const visit = (f, trail) => {
+    if (state.get(f) === 'done') return;
+    assert.notEqual(state.get(f), 'open', `cycle: ${[...trail, f].join(' -> ')}`);
+    state.set(f, 'open');
+    for (const d of elGraph.get(f) || []) if (elGraph.has(d)) visit(d, [...trail, f]);
+    state.set(f, 'done');
+  };
+  for (const f of elGraph.keys()) visit(f, []);
+});
