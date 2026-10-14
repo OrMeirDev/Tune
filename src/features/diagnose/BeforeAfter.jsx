@@ -32,7 +32,6 @@ function ResultLine({ r }) {
       {r.state === 'notComparable' && <span className="ba-why">{t(`ba.why.${r.reason}`)}</span>}
       {r.before?.count > 1 && <span className="ba-why">{t(r.metric.startsWith('boot') ? 'ba.medianBoots' : 'ba.median', { n: r.before.count })}</span>}
       {r.metric.startsWith('boot') && r.after?.conditions?.bootType && <span className="ba-why">{bootKind(r.after.conditions.bootType, t)}</span>}
-      {r.confounded && <span className="ba-why warn-text">{t('ba.confounded')}</span>}
     </div>
   );
 }

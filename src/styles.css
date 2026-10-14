@@ -587,6 +587,8 @@ html[dir=ltr] .path-text { text-align: left; }
 .tag.c-measured { background: rgba(37, 99, 235, .09); color: #1d4ed8; }
 .tag.c-suspected { background: #fef3c7; color: #92400e; }
 .tag.c-unknown { background: #f1f1f4; color: #5b5f6e; }
+.tag.c-historical { background: #eef2ff; color: #4338ca; }
+.dx-hist { font-style: italic; }
 .tag.c-ok, .tag.s-better { background: rgba(var(--accent-rgb, 22, 163, 74), .1); color: var(--accent); }
 .tag.i-high, .tag.s-worse { background: #fee2e2; color: #b91c1c; }
 .tag.i-medium { background: #ffedd5; color: #9a3412; }

@@ -14,6 +14,8 @@
 //   say        which wording to use (dx.<key>.<say>), vars: the numbers in it
 //   action     one next step: { kind: 'go', page } · { kind: 'apply', rec } · { kind: 'guide', rec }
 //              · { kind: 'installService' } · { kind: 'recheck' } · null (nothing to click; the text says what to do)
+//   historical true when a check couldn't run now and the last value ever measured is shown with it
+//              (as history, never judged)
 
 export const PROBLEMS = ['slowBoot', 'gameStutter', 'overheating'];
 
@@ -71,20 +73,33 @@ const applyOrGo = (r) => (r.action ? { kind: 'apply', rec: r.key } : { kind: 'go
 
 // ---- the checks ----
 
+// The start-up times this check read from Windows. Only these are judged: when this read failed, a
+// start stored by an earlier read is history, and an old "fine" must never stand in for a failed check.
+// `boot` is { facts, current (this read's newest start), last (the newest start ever stored) }.
+const currentBoot = (boot) => (boot?.facts?.timings === 'ok' ? boot.current || {} : {});
+const kind = (r) => r.conditions?.bootType || 'unknown';
+const when = (r) => r.conditions?.startedAt || r.at;
+
 function bootTimes({ boot }) {
   if (!boot) return [pending('bootToDesktop')];
-  const { facts = {}, latest = {} } = boot;
-  const desk = latest.bootToDesktopMs;
-  const after = latest.bootAfterLogonMs;
+  const { facts = {}, last = {} } = boot;
+  const { bootToDesktopMs: desk, bootAfterLogonMs: after } = currentBoot(boot);
   if (!desk && !after) {
     // needsAdmin: Windows keeps its start-up timing to administrators · none: no start recorded yet
-    // · busy: Tune was measuring something else · unavailable: the log couldn't be read
+    // · busy: Tune was measuring something else · unavailable: the log couldn't be read (or a read
+    // that worked returned no usable start)
     const why = ['needsAdmin', 'none', 'busy'].includes(facts.timings) ? facts.timings : 'unavailable';
-    return [unknown('bootToDesktop', why, ['busy', 'unavailable'].includes(why) ? { kind: 'recheck' } : null)];
+    const f = unknown('bootToDesktop', why, ['busy', 'unavailable'].includes(why) ? { kind: 'recheck' } : null);
+    // the last start ever measured, shown as such: historical, not judged
+    const ld = last.bootToDesktopMs;
+    const la = last.bootAfterLogonMs;
+    if (ld || la) {
+      f.historical = true;
+      f.vars = { lastDesk: ld ? secs(ld.value) : null, lastAfter: la ? secs(la.value) : null, lastAt: when(ld || la), lastKind: kind(ld || la) };
+    }
+    return [f];
   }
   const out = [];
-  const kind = (r) => r.conditions?.bootType || 'unknown';
-  const when = (r) => r.conditions?.startedAt || r.at;
   if (desk && desk.value != null) {
     out.push(desk.value <= LIMITS.bootToDesktopMs
       ? fine('bootToDesktop', 'ok', { s: secs(desk.value), kind: kind(desk), at: when(desk) })
@@ -104,8 +119,8 @@ function startupApps({ startup, sources = {}, boot }) {
   if (!startup) return pending('startupApps');
   const n = startup.filter((s) => s.enabled).length;
   if (n <= LIMITS.startupApps) return fine('startupApps', 'ok', { n });
-  // measured slow after the desktop appears: the startup apps are the likely reason, not a maybe
-  const afterSlow = boot?.latest?.bootAfterLogonMs?.value > LIMITS.bootAfterLogonMs;
+  // measured slow after the desktop appears (by this check): the startup apps are the likely reason
+  const afterSlow = currentBoot(boot).bootAfterLogonMs?.value > LIMITS.bootAfterLogonMs;
   return problem('startupApps', { impact: afterSlow ? 'high' : 'medium', certainty: 'suspected', say: 'many', vars: { n }, action: { kind: 'go', page: 'startup' } });
 }
 

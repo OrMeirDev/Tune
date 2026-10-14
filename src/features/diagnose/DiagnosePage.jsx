@@ -16,6 +16,12 @@ import { PROBLEM_LIST } from './problems.js';
 // The words for a finding: its numbers, the date of the start it measured, the kind of start; the
 // check's own wording, or the shared one for why a check couldn't run (dx.say.*).
 const varsOf = (f, t) => ({ ...f.vars, at: f.vars.at ? fmtDate(f.vars.at, t) : '', kind: f.vars.kind ? bootKind(f.vars.kind, t) : '' });
+// The last start ever measured, when this check couldn't read one: dated and marked as history.
+function historyText(f, t) {
+  const { lastDesk, lastAfter, lastAt, lastKind } = f.vars;
+  const values = [lastDesk != null && t('dx.hist.desk', { s: lastDesk }), lastAfter != null && t('dx.hist.after', { s: lastAfter })].filter(Boolean).join(' · ');
+  return t('dx.historical', { values, at: fmtDate(lastAt, t), kind: bootKind(lastKind, t) });
+}
 function sayText(f, t) {
   const key = `dx.${f.key}.${f.say}`;
   const s = t(key, varsOf(f, t));
@@ -49,8 +55,10 @@ function FindingRow({ f, recs, onAction, busy, prog }) {
           {t(`dx.${f.key}.title`)}
           {f.certainty !== 'pending' && <span className={`tag c-${f.ok === true ? 'ok' : f.certainty}`}>{t(`dx.c.${f.ok === true ? 'ok' : f.certainty}`)}</span>}
           {f.ok === false && <span className={`tag i-${f.impact}`}>{t(`dx.i.${f.impact}`)}</span>}
+          {f.historical && <span className="tag c-historical">{t('dx.c.historical')}</span>}
         </div>
         <div className="dmeta" style={{ whiteSpace: 'normal' }}>{f.certainty === 'pending' ? t('dx.checking') : sayText(f, t)}</div>
+        {f.historical && <div className="dmeta dx-hist" style={{ whiteSpace: 'normal' }}>{historyText(f, t)}</div>}
       </div>
       <div className="acts">{button}</div>
     </div>
@@ -88,7 +96,8 @@ export function DiagnosePage({ problem, onProblem, recs, gpu, startup, perf, his
   useEffect(() => { loadView(); }, [loadView, measured]);
   useEffect(() => { if (problem === 'slowBoot' && !facts && !bootBusy) readBoot(); }, [problem, facts, bootBusy, readBoot]);
 
-  const boot = useMemo(() => (facts && view ? { facts, latest: view.latest || {} } : null), [facts, view]);
+  // what this read returned is judged; the newest start ever stored is shown only as history
+  const boot = useMemo(() => (facts && view ? { facts, current: facts.current || {}, last: view.latest || {} } : null), [facts, view]);
   const d = useMemo(() => (problem ? diagnose(problem, { recs, gpu, startup, perf, samples: history, sources, service, scanning, boot }) : null),
     [problem, recs, gpu, startup, perf, history, sources, service, scanning, boot]);
 

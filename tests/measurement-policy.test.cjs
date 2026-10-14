@@ -120,13 +120,13 @@ test('a startup change waits for the next start of Windows, then compares starts
   assert.equal(c.results[0].state, 'same');
 });
 
-test('another change before the after measurement is flagged', () => {
+test('two changes with no start of Windows between them: neither is credited alone', () => {
   const first = { id: 's1', action: 'startup', detail: { name: 'A', enabled: false }, at: at(100) };
   const second = { id: 's2', action: 'startup', detail: { name: 'B', enabled: false }, at: at(110) };
   const recs = [boot(0, 'bootAfterLogonMs', 40000), boot(300, 'bootAfterLogonMs', 30000)];
   const [newest, older] = M.actionComparisons([second, first], recs);
-  assert.equal(older.results[0].confounded, true, 'the first change is measured together with the second');
-  assert.equal(newest.results[0].confounded, undefined);
+  assert.deepEqual([older.results[0].state, older.results[0].reason], ['notComparable', 'anotherChange'], 'the first has no after of its own');
+  assert.deepEqual([newest.results[0].state, newest.results[0].reason], ['notComparable', 'anotherChange'], "the second's before would be from before the first");
 });
 
 test('a power-plan change is measured at rest; Game Mode and GPU scheduling are not measurable at rest', () => {
@@ -149,4 +149,71 @@ test('stored records are checked before use', () => {
   assert.equal(M.validRecord({ metric: 'evil', value: 5, at: at(0), method: 'x' }), false);
   assert.equal(M.validRecord({ metric: 'restCpuLoad', value: 5, at: 'yesterday', method: 'x' }), false);
   assert.throws(() => M.record({ metric: 'nope', value: 1 }));
+});
+
+// ---- review findings (gaps found before merge) ----
+
+test("a change is credited only with what was measured before the next change (gap 2)", () => {
+  // A changes nothing measurable; B (later) saves 20 s. A's "after" must not reach past B.
+  const A = { id: 'a', action: 'startup', detail: { name: 'A', enabled: false }, at: at(100) };
+  const B = { id: 'b', action: 'startup', detail: { name: 'B', enabled: false }, at: at(200) };
+  const recs = [
+    boot(0, 'bootAfterLogonMs', 90000), boot(30, 'bootAfterLogonMs', 90000), boot(60, 'bootAfterLogonMs', 90000),
+    boot(150, 'bootAfterLogonMs', 90000), // after A, before B
+    boot(250, 'bootAfterLogonMs', 70000), boot(300, 'bootAfterLogonMs', 70000), // after B
+  ];
+  const [b, a] = M.actionComparisons([B, A], recs);
+  const ra = a.results.find((r) => r.metric === 'bootAfterLogonMs');
+  assert.equal(ra.state, 'same', "A is not credited with B's 20 s");
+  assert.equal(ra.after.value, 90000);
+  // B's before is only what was measured between A and B
+  const rb = b.results.find((r) => r.metric === 'bootAfterLogonMs');
+  assert.deepEqual([rb.state, rb.delta, rb.before.value], ['better', -20000, 90000]);
+  assert.equal(rb.before.count, undefined, 'one start between A and B, not the three before A');
+});
+
+test('nothing measured between a change and the next one: not comparable, never credited (gap 2)', () => {
+  const A = { id: 'a', action: 'startup', detail: { name: 'A', enabled: false }, at: at(100) };
+  const B = { id: 'b', action: 'setting', detail: { key: 'power' }, at: at(120) }; // any change to Windows counts
+  const recs = [boot(0, 'bootAfterLogonMs', 90000), boot(250, 'bootAfterLogonMs', 70000)];
+  const [, a] = M.actionComparisons([B, A], recs);
+  const ra = a.results.find((r) => r.metric === 'bootAfterLogonMs');
+  assert.deepEqual([ra.state, ra.reason], ['notComparable', 'anotherChange']);
+  assert.equal(ra.after, null, "the start after B is not shown as A's after");
+  // a driver install in between is a change too (it has no before/after of its own, so it isn't listed)
+  const D = { id: 'd', action: 'drivers', detail: { items: ['x'] }, at: at(120) };
+  const [a2] = M.actionComparisons([D, A], recs);
+  assert.equal(a2.results.find((r) => r.metric === 'bootAfterLogonMs').reason, 'anotherChange');
+  // a cleanup only deletes files: it doesn't cut the window
+  const C = { id: 'c', action: 'clean', detail: { freed: 1 }, at: at(120) };
+  const [, a3] = M.actionComparisons([C, A], recs);
+  assert.equal(a3.results.find((r) => r.metric === 'bootAfterLogonMs').state, 'better');
+});
+
+test('two starts close together: each gets its own kind of start (gap 3)', () => {
+  // a Fast Startup start, then a full restart less than a minute later
+  const recs = M.bootRecords({
+    types: [{ at: '2026-10-14T08:00:20Z', code: 1 }, { at: '2026-10-14T08:01:00Z', code: 0 }],
+    timings: [
+      { at: '2026-10-14T08:00:45Z', startedAt: '2026-10-14T08:00:00Z', mainPathMs: 9000, postBootMs: 15000 },
+      { at: '2026-10-14T08:03:00Z', startedAt: '2026-10-14T08:00:50Z', mainPathMs: 25000, postBootMs: 40000 },
+    ],
+  });
+  const kinds = recs.filter((r) => r.metric === 'bootToDesktopMs').map((r) => [r.conditions.startedAt, r.conditions.bootType]);
+  assert.deepEqual(kinds, [['2026-10-14T08:00:00.000Z', 'fastStartup'], ['2026-10-14T08:00:50.000Z', 'full']]);
+});
+
+test('a start whose kind is unclear stays unknown (gap 3)', () => {
+  // two different kinds recorded right at one start's beginning, and no other start known to own one
+  const recs = M.bootRecords({
+    types: [{ at: '2026-10-14T08:00:05Z', code: 1 }, { at: '2026-10-14T08:00:08Z', code: 0 }],
+    timings: [{ at: '2026-10-14T08:03:00Z', startedAt: '2026-10-14T08:00:00Z', mainPathMs: 25000, postBootMs: 40000 }],
+  });
+  assert.ok(recs.every((r) => r.conditions.bootType === 'unknown'));
+  // an event long after the start belongs to another (unrecorded) start, not to this one
+  const late = M.bootRecords({
+    types: [{ at: '2026-10-14T08:10:00Z', code: 0 }],
+    timings: [{ at: '2026-10-14T08:20:00Z', startedAt: '2026-10-14T08:00:00Z', mainPathMs: 25000, postBootMs: 40000 }],
+  });
+  assert.ok(late.every((r) => r.conditions.bootType === 'unknown'));
 });

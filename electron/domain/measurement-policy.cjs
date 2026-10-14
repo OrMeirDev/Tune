@@ -30,6 +30,11 @@ const MIN_REST_SAMPLES = 5;
 const REST_LOAD = 20;
 // A rest "before" older than this is not compared: the room, the season and the PC's use change.
 const REST_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
+// Changes to Windows that can move a start-up time or a reading at rest. A change's measurements are
+// only those taken after the previous such change and before the next one, so an effect is never
+// credited to the wrong change. A cleanup only deletes files (it has its own before/after pair);
+// downloads and restore points change nothing that is measured.
+const BOUNDARIES = ['startup', 'setting', 'drivers', 'enable', 'service'];
 // What a change could have affected, and how the "after" is taken (see actionComparisons).
 const EFFECTS = {
   clean: { metrics: ['diskFreeBytes'], paired: true },
@@ -96,19 +101,29 @@ function diskPair(before, after, { actionId, at }) {
   return [rec(before, 'before'), rec(after, 'after')];
 }
 
-// Windows' start-up timings (Diagnostics-Performance event 100), each with the kind of start it
-// was: the last Kernel-Boot event 27 written between that start's beginning and its timing record.
+// Which start a Kernel-Boot event 27 belongs to. It is written a few seconds into a start, so it
+// belongs to the recorded start that began most recently before it (a few seconds' leeway for the two
+// clocks), and only if it came soon after that start began; one written later belongs to a start
+// Windows didn't time.
+const KIND_SKEW_MS = 5000;
+const KIND_WINDOW_MS = 120000;
+
+// Windows' start-up timings (Diagnostics-Performance event 100), each with the kind of start it was
+// (Kernel-Boot event 27). Two starts close together each get their own event; a start with no event of
+// its own, or with two that disagree, stays 'unknown' and is never compared.
 function bootRecords({ timings = [], types = [] }) {
-  const kinds = types.map((t) => ({ at: parseTime(t.at), code: t.code })).filter((t) => t.at != null).sort((a, b) => a.at - b.at);
+  const kinds = types.map((t) => ({ at: parseTime(t.at), code: t.code })).filter((t) => t.at != null);
+  const starts = timings.map((t) => parseTime(t.startedAt)).filter((s) => s != null).sort((a, b) => a - b);
+  const ownerOf = (k) => starts.filter((s) => s <= k.at + KIND_SKEW_MS).at(-1);
   const out = [];
   for (const t of timings) {
     const at = parseTime(t.at);
     if (at == null) continue;
     const started = parseTime(t.startedAt);
-    // event 27 is written a few seconds into the start; without the start's own beginning there is
-    // no telling which start an event 27 belongs to, so the kind stays unknown
-    const kind = started == null ? null : kinds.find((k) => k.at >= started - 60000 && k.at <= at);
-    const bootType = kind ? BOOT_TYPES[kind.code] || 'unknown' : 'unknown';
+    // without the start's own beginning there is no telling which event 27 is its own
+    const own = started == null ? [] : kinds.filter((k) => ownerOf(k) === started && k.at - started <= KIND_WINDOW_MS);
+    const codes = [...new Set(own.map((k) => k.code))];
+    const bootType = codes.length === 1 ? BOOT_TYPES[codes[0]] || 'unknown' : 'unknown';
     const startedAt = iso(started ?? (isNum(t.bootMs) ? at - t.bootMs : at));
     const conditions = { bootType, startedAt };
     const extra = isNum(t.startupApps) ? { startupApps: t.startupApps } : undefined;
@@ -167,42 +182,47 @@ function combined(list) {
 
 const startOf = (r) => parseTime(r.conditions?.startedAt || r.at);
 
-// The before and after for one measure around a change made at time `t`, from the measurements
-// taken on their own (rest measurements, starts of Windows). The after is the first one taken after
+// The before and after for one measure around a change made at time `t`, from the measurements taken
+// on their own (rest measurements, starts of Windows), within the change's own window: after the
+// previous change (`prev`) and before the next one (`next`). The after is the first one taken after
 // the change (up to 3 comparable ones combined); the before, up to 3 comparable ones just before it.
-function aroundChange(metric, t, records, { otherChanges = [] } = {}) {
+function aroundChange(metric, t, records, { prev = -Infinity, next = Infinity } = {}) {
   const usable = records.filter((r) => r.metric === metric && r.value != null).sort((a, b) => startOf(a) - startOf(b));
-  const after = usable.filter((r) => startOf(r) > t);
-  const beforeAll = usable.filter((r) => startOf(r) < t);
+  const beforeAll = usable.filter((r) => startOf(r) > prev && startOf(r) < t);
+  const after = usable.filter((r) => startOf(r) > t && startOf(r) < next);
+  // measurements from before the previous change, which this change's before must not use
+  const earlier = usable.some((r) => startOf(r) <= prev);
+  const lastBefore = beforeAll.at(-1) || null;
   if (!after.length) {
-    const last = beforeAll.at(-1);
-    return { metric, state: 'waiting', before: last || null };
+    // the next change came before anything was measured: this change can't be measured on its own
+    if (next !== Infinity) return { metric, state: 'notComparable', reason: 'anotherChange', before: lastBefore, after: null };
+    return { metric, state: 'waiting', before: lastBefore };
   }
   // the first after that has something comparable before it (a busy rest measurement or a start
   // of another kind is skipped when a later one matches)
   const first = after.find((x) => beforeAll.some((r) => comparable(r, x).ok)) || after[0];
   const afters = after.filter((r) => startOf(r) >= startOf(first) && comparable(first, r).ok).slice(0, 3);
   const befores = beforeAll.filter((r) => comparable(r, first).ok).slice(-3);
-  const result = { metric };
-  // another change that could affect the same measure, made before the after was taken
-  if (otherChanges.some((c) => c > t && c < startOf(first))) result.confounded = true;
   if (!befores.length) {
     // nothing comparable before: show what there is, claim nothing
-    return { ...result, state: beforeAll.length ? 'notComparable' : 'missing', reason: beforeAll.length ? comparable(beforeAll.at(-1), first).reason : 'noBefore', before: beforeAll.at(-1) || null, after: first };
+    const reason = beforeAll.length ? comparable(lastBefore, first).reason : earlier ? 'anotherChange' : 'noBefore';
+    return { metric, state: beforeAll.length || earlier ? 'notComparable' : 'missing', reason, before: lastBefore, after: first };
   }
   if (METRICS[metric].kind === 'rest' && t - startOf(befores.at(-1)) > REST_MAX_AGE_MS) {
-    return { ...result, state: 'notComparable', reason: 'beforeTooOld', before: befores.at(-1), after: first };
+    return { metric, state: 'notComparable', reason: 'beforeTooOld', before: befores.at(-1), after: first };
   }
-  return { ...result, ...compare(combined(befores), combined(afters)) };
+  return { metric, ...compare(combined(befores), combined(afters)) };
 }
 
 // What each change Tune made did to the measurements (plan PF02.3), newest change first. Cleanup is
 // measured right before and after (the same change ID); a startup change shows up only at the next
 // start of Windows, and a power-plan change at the next rest measurement. Until that "after" exists
-// the change is 'waiting' for it, and it is never shown as an improvement in the meantime.
+// the change is 'waiting' for it, and it is never shown as an improvement in the meantime. `actions`
+// is the whole history: every change to Windows in it bounds its neighbours' windows.
 function actionComparisons(actions = [], records = [], { limit = 15 } = {}) {
-  const changes = actions.filter((a) => a && EFFECTS[a.action] && parseTime(a.at) != null);
-  const timesFor = (metric) => changes.filter((c) => EFFECTS[c.action].metrics.includes(metric) && (!EFFECTS[c.action].only || EFFECTS[c.action].only.includes(c.detail?.key))).map((c) => parseTime(c.at));
+  const valid = actions.filter((a) => a && parseTime(a.at) != null);
+  const changes = valid.filter((a) => EFFECTS[a.action]);
+  const bounds = valid.filter((a) => BOUNDARIES.includes(a.action)).map((a) => parseTime(a.at));
   return changes.slice(0, limit).map((a) => {
     const eff = EFFECTS[a.action];
     const base = { id: a.id || null, action: a.action, detail: a.detail || {}, at: a.at };
@@ -216,7 +236,9 @@ function actionComparisons(actions = [], records = [], { limit = 15 } = {}) {
         return { metric, ...compare(before, after) };
       }
       const t = parseTime(a.at);
-      return aroundChange(metric, t, records, { otherChanges: timesFor(metric).filter((x) => x !== t) });
+      const prev = Math.max(-Infinity, ...bounds.filter((x) => x < t));
+      const next = Math.min(Infinity, ...bounds.filter((x) => x > t));
+      return aroundChange(metric, t, records, { prev, next });
     });
     return { ...base, results };
   });
@@ -235,6 +257,6 @@ function latestByMetric(records = []) {
 }
 
 module.exports = {
-  METRICS, BOOT_TYPES, MIN_REST_SAMPLES, REST_LOAD, EFFECTS,
+  METRICS, BOOT_TYPES, MIN_REST_SAMPLES, REST_LOAD, EFFECTS, BOUNDARIES,
   median, record, validRecord, summarizeRest, diskPair, bootRecords, bootFacts, comparable, compare, aroundChange, actionComparisons, latestByMetric,
 };

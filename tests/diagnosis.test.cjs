@@ -6,12 +6,14 @@ const assert = require('node:assert/strict');
 
 const load = () => import('../src/domain/diagnosis.mjs');
 const samples = (n, s) => Array.from({ length: n }, () => ({ cpuNote: null, ramTotalBytes: 16e9, ...s }));
+// the newest start: what this read returned (`current`) and the newest one stored (`last`)
+const times = (desk, after) => ({
+  bootToDesktopMs: desk == null ? undefined : { value: desk, at: '2026-10-14T07:00:00Z', conditions: { bootType: 'full' } },
+  bootAfterLogonMs: after == null ? undefined : { value: after, at: '2026-10-14T07:00:00Z', conditions: { bootType: 'full' }, extra: { startupApps: 19 } },
+});
 const boot = (desk, after, extra = {}) => ({
   facts: { fastStartup: true, systemMedia: 'ssd', lastBootType: 'full', timings: 'ok', ...extra },
-  latest: {
-    bootToDesktopMs: desk == null ? undefined : { value: desk, at: '2026-10-14T07:00:00Z', conditions: { bootType: 'full' } },
-    bootAfterLogonMs: after == null ? undefined : { value: after, at: '2026-10-14T07:00:00Z', conditions: { bootType: 'full' }, extra: { startupApps: 19 } },
-  },
+  current: times(desk, after), last: times(desk, after),
 });
 const recs = (over = {}) => [
   { key: 'power', plan: 'balanced', ok: true, action: null },
@@ -88,7 +90,7 @@ test('a cause is shown as suspected; a reading as measured; each finding has at 
 
 test("what couldn't be checked is 'not checked', never fine, and the diagnosis is never 'nothing found'", async () => {
   const { diagnose } = await load();
-  const d = diagnose('slowBoot', { ...healthy(), boot: { facts: { timings: 'needsAdmin', systemMedia: 'unknown', fastStartup: null }, latest: {} }, sources: { recs: 'ok', startup: 'error' }, startup: null });
+  const d = diagnose('slowBoot', { ...healthy(), boot: { facts: { timings: 'needsAdmin', systemMedia: 'unknown', fastStartup: null }, current: {}, last: {} }, sources: { recs: 'ok', startup: 'error' }, startup: null });
   assert.equal(d.state, 'incomplete');
   const by = Object.fromEntries(d.findings.map((f) => [f.key, f]));
   assert.deepEqual([by.bootToDesktop.ok, by.bootToDesktop.certainty, by.bootToDesktop.say], [null, 'unknown', 'needsAdmin']);
@@ -152,4 +154,33 @@ test('slow start: an HDD and slow measured starts; Fast Startup off is only a lo
 test('an unknown problem is refused', async () => {
   const { diagnose } = await load();
   assert.throws(() => diagnose('internet', healthy()));
+});
+
+// ---- review findings (gaps found before merge) ----
+
+test("a failed start-up read is never 'OK' on an old measurement; the old one is shown as historical (gap 1)", async () => {
+  const { diagnose } = await load();
+  const old = times(18000, 130000); // fine to the desktop, slow after it, from an earlier read
+  for (const timings of ['needsAdmin', 'unavailable', 'busy', 'none']) {
+    const d = diagnose('slowBoot', { ...healthy(), startup: Array.from({ length: 20 }, () => ({ enabled: true })), boot: { facts: { timings, systemMedia: 'ssd', fastStartup: true }, current: {}, last: old } });
+    const rows = d.findings.filter((f) => f.key.startsWith('boot'));
+    assert.equal(rows.length, 1, timings);
+    assert.deepEqual([rows[0].ok, rows[0].certainty, rows[0].say, rows[0].historical], [null, 'unknown', timings, true], timings);
+    assert.deepEqual([rows[0].vars.lastDesk, rows[0].vars.lastAfter], [18, 130], 'the last known values are shown, as such');
+    assert.notEqual(d.state, 'nothingFound');
+    // the old slow start doesn't raise the startup apps to high impact either
+    assert.equal(d.findings.find((f) => f.key === 'startupApps').impact, 'medium', timings);
+  }
+  // nothing ever measured: not checked, no history line
+  const none = diagnose('slowBoot', { ...healthy(), boot: { facts: { timings: 'needsAdmin' }, current: {}, last: {} } });
+  const row = none.findings.find((f) => f.key === 'bootToDesktop');
+  assert.deepEqual([row.ok, row.historical], [null, undefined]);
+});
+
+test('a successful read judges what this read returned, not an older stored start (gap 1)', async () => {
+  const { diagnose } = await load();
+  const stored = times(18000, 25000);
+  const now = times(80000, 25000);
+  const d = diagnose('slowBoot', { ...healthy(), boot: { facts: { timings: 'ok', systemMedia: 'ssd', fastStartup: true }, current: now, last: stored } });
+  assert.equal(d.findings.find((f) => f.key === 'bootToDesktop').ok, false);
 });

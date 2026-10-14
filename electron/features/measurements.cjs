@@ -3,7 +3,7 @@
 // What a measurement is and when two may be compared lives in domain/measurement-policy.cjs.
 const fs = require('fs');
 const os = require('os');
-const { bootFacts, bootRecords, summarizeRest } = require('../domain/measurement-policy.cjs');
+const { bootFacts, bootRecords, latestByMetric, summarizeRest } = require('../domain/measurement-policy.cjs');
 const { runPS } = require('../infra/powershell.cjs');
 const { serviceCall } = require('../privilege/service.cjs');
 
@@ -82,11 +82,14 @@ try {
 } catch {}
 $result = @{ types = $types; timings = $timings; timingStatus = $timingStatus; hiberboot = $hiberboot; hibernate = $hibernate; media = $media; bus = $bus }`;
 
+// The facts, every start read (stored by the caller), and `current`: the newest start this read
+// returned, which is the only one the diagnosis judges (an older stored one is history).
 async function bootInfo() {
   const r = await runPS(BOOT_PS, { timeoutMs: 60000 });
   if (!r.ok) return r;
   const raw = r.data || {};
-  return { ok: true, data: { ...bootFacts(raw), records: bootRecords({ timings: [].concat(raw.timings || []), types: [].concat(raw.types || []) }) } };
+  const records = bootRecords({ timings: [].concat(raw.timings || []), types: [].concat(raw.types || []) });
+  return { ok: true, data: { ...bootFacts(raw), records, current: latestByMetric(records) } };
 }
 
 module.exports = { diskFree, restMeasure, bootInfo, BOOT_PS };

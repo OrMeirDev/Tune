@@ -19,7 +19,7 @@ decisions (see the end).
 | P06 | Profiles (PF07) | Not started; needs P01, P02 |
 | P07 | Upgrade advice (PF08) | Not started; needs P01, P05 |
 | L00 | Licence policy and choice of service | Open decisions (below) |
-| L01 | Server and one-time redemption | **In progress**: proof of concept in `licensing/` (not shipped in the installer) |
+| L01 | Server and one-time redemption | **Proof of concept done**: `licensing/` (not shipped in the installer); run `node --test "licensing/**/*.test.cjs"` |
 | L02 | Activation and recovery inside Tune | Not started; the certificate check it needs is in the PoC |
 | L03 | Admin and manual sale | Not started (the PoC has the admin issuing call only) |
 | L04 | Automatic payment | Not started; needs a payment provider |
@@ -44,8 +44,14 @@ decisions (see the end).
   (same method; both at rest; starts of the same kind; the same drive); otherwise both values are
   shown and nothing is claimed. Differences within normal variation are "no measurable change"; a
   change for the worse is shown as worse. Several starts or rest measurements are combined by their
-  median. A rest "before" older than a week isn't compared; another change made before the after was
-  taken is flagged.
+  median. A rest "before" older than a week isn't compared. Each change's measurements are only
+  those taken after the previous change to Windows and before the next one (startup, settings,
+  drivers, devices, the service); a change with nothing measured in its own window is "not
+  comparable", never credited.
+- **Only the current read is judged**: when Windows' start-up records can't be read this time, the
+  diagnosis says so and shows the last stored start as *historical*, never as "OK". A start's kind is
+  taken only from its own Kernel-Boot event (the one written soon after it began, not a neighbouring
+  start's); two that disagree leave it unknown.
 - **Linked to changes** (PF02.3): history entries now carry an ID; a cleanup stores its before/after
   pair under that ID; a startup change waits for the next start of Windows; a power-plan change waits
   for the next rest measurement. The history page shows what each change measurably did; the

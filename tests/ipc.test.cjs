@@ -38,7 +38,7 @@ function world() {
     applyRecommendation: rec('applyRecommendation'),
     diskFree: rec('diskFree', { drive: 'C:', freeBytes: 40e9 }),
     restMeasure: rec('restMeasure', ok([{ metric: 'restCpuLoad', value: 4 }])),
-    bootInfo: rec('bootInfo', ok({ fastStartup: true, systemMedia: 'ssd', lastBootType: 'full', timings: 'ok', records: [{ metric: 'bootToDesktopMs', value: 20000 }] })),
+    bootInfo: rec('bootInfo', ok({ fastStartup: true, systemMedia: 'ssd', lastBootType: 'full', timings: 'ok', records: [{ metric: 'bootToDesktopMs', value: 20000 }], current: { bootToDesktopMs: { value: 20000 } } })),
   };
   const measured = [];
   const history = [];
@@ -178,7 +178,8 @@ test('measurements are taken by the main process; the window only names the kind
   assert.equal(r.ok, true);
   assert.deepEqual(w.measured, [{ metric: 'restCpuLoad', value: 4 }], 'what the main process measured is stored');
   const b = await w.call('measure:take', 'boot');
-  assert.deepEqual(b.data, { fastStartup: true, systemMedia: 'ssd', lastBootType: 'full', timings: 'ok' }, 'the facts go back, the records go to the store');
+  assert.deepEqual(b.data, { fastStartup: true, systemMedia: 'ssd', lastBootType: 'full', timings: 'ok', current: { bootToDesktopMs: { value: 20000 } } },
+    "the facts and this read's own values go back; the records go to the store");
   assert.equal(w.measured.length, 2);
   assert.equal((await w.call('measure:list')).data.records.length, 2);
   assert.equal((await w.call('measure:export')).data, 'C:\\dl\\Tune-measurements.csv');
