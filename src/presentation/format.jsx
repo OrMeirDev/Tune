@@ -16,6 +16,7 @@ export const errText = (e, t) => ({
   'signature check failed': t('err.signature'),
   'results are out of date: scan again': t('err.stale'),
   busy: t('err.busy'),
+  'not entitled': t('err.notEntitled'),
 }[e] || t('err.generic', { e }));
 
 export const mmss = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };

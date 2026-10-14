@@ -3,6 +3,7 @@ import { FolderOpen, Globe, RefreshCw, ShieldCheck } from 'lucide-react';
 import { playChime } from '../../components/ScanSuccess.jsx';
 import { ProgressPill } from '../../components/TaskProgress.jsx';
 import { useT } from '../../i18n.js';
+import { LicenseSection } from '../license/LicenseSection.jsx';
 
 export function SettingsPage({ version, status, onCheck, settings, onPickDir, onLang, onSound, service, onInstallService, onRemoveService, busy, prog }) {
   const t = useT();
@@ -51,6 +52,7 @@ export function SettingsPage({ version, status, onCheck, settings, onPickDir, on
             </>)}
           </div>
         </div>
+        <LicenseSection />
         <div className="setting">
           <div><div className="setting-title">{t('se.sources')}</div><div className="row-meta">{t('se.sourcesNote')}</div></div>
         </div>

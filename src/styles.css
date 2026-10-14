@@ -617,3 +617,29 @@ html[dir=ltr] .path-text { text-align: left; }
 .ba-line.ba-worse > svg { color: #b91c1c; }
 .ba-why { color: var(--muted); font-size: 12px; }
 .drow .ba-line { margin-top: 3px; }
+
+/* The licence: its row in Settings and the activation dialog (one form per step). */
+.license-setting .row-meta + .row-meta { margin-top: 1px; }
+.license-dialog { width: min(560px, 100%); }
+.license-body { display: flex; flex-direction: column; gap: 12px; padding: 4px 0 12px; overflow-y: auto; }
+.lic-form { display: flex; flex-direction: column; gap: 6px; }
+.lic-form label { font-weight: 600; font-size: 13.5px; }
+.lic-row { display: flex; gap: 8px; align-items: center; }
+.lic-row input { flex: 1; min-width: 0; font: inherit; font-size: 14px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: #fff; color: var(--text); }
+.lic-row input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+#lic-serial, #lic-code { font-family: Consolas, 'Cascadia Mono', monospace; letter-spacing: .5px; }
+.lic-verified { display: flex; align-items: center; gap: 6px; color: var(--accent); }
+.lic-or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; }
+.lic-or::before, .lic-or::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.lic-recover { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.lic-recover .dmeta { white-space: normal; }
+.lic-recover .btn-ghost { flex-shrink: 0; }
+.lic-choices { border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+.lic-choices legend { font-weight: 600; font-size: 13px; padding: 0 4px; }
+.lic-choices label { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.lic-choices .btn-primary { align-self: flex-start; margin-top: 4px; }
+.lic-outcome { margin: 0; }
+.lic-outcome .link-btn { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; }
+.lic-done { display: flex; gap: 12px; align-items: flex-start; color: var(--text); }
+.lic-done > svg { color: var(--accent); flex-shrink: 0; margin-top: 2px; }
+.lic-done b { display: block; margin-bottom: 4px; }
