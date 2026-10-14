@@ -23,6 +23,14 @@ function runPS(body, { timeoutMs = 10 * 60 * 1000 } = {}) {
   return new Promise((resolve) => {
     const child = spawn(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], { windowsHide: true });
     const timer = setTimeout(() => child.kill(), timeoutMs);
+    // PowerShell missing or blocked: an error result instead of an unhandled 'error' event
+    // (a promise settles once, so a 'close' after this changes nothing)
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      fs.rm(out, { force: true }, () => {});
+      fs.rm(script, { force: true }, () => {});
+      resolve({ ok: false, error: `could not start PowerShell: ${e.message}` });
+    });
     child.on('close', (code) => {
       clearTimeout(timer);
       let res;

@@ -8,7 +8,10 @@ const { privileged } = require('../privilege/service.cjs');
 const createRestorePoint = () => privileged({ op: 'restore' }, { timeoutMs: 5 * 60 * 1000 });
 
 function openSystemRestore() {
-  spawn(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'rstrui.exe'), [], { detached: true, stdio: 'ignore' }).unref();
+  // a missing rstrui.exe must not take Tune down with an unhandled 'error' event
+  const child = spawn(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'rstrui.exe'), [], { detached: true, stdio: 'ignore' });
+  child.on('error', () => {});
+  child.unref();
 }
 
 module.exports = { createRestorePoint, openSystemRestore };

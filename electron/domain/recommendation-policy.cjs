@@ -74,14 +74,20 @@ function memoryAdvice(x) {
     ok: channels == null ? null : channels >= 2 ? true : x.laptop && mods.length === 1 ? null : false,
     guide: channels === 1 && mods.length > 1 ? 'channels' : null,
   };
-  // Speed: running below what the kit is sold at means its XMP/EXPO profile is off.
+  // Speed: running below what the kit is sold at means its XMP/EXPO profile is off. What the kit is
+  // sold at is known only from its part number; the speed the stick reports is a floor, not its
+  // rating. So: below the reported speed is certainly too slow; otherwise, without a readable part
+  // number, it is unknown whether the kit could run faster (not "fine").
   const configured = Math.min(...mods.map((m) => m.configured || m.speed || 0));
-  const rated = Math.max(...mods.map((m) => Math.max(ratedFromPart(m.part) || 0, m.speed || 0)));
+  const fromPart = Math.max(...mods.map((m) => ratedFromPart(m.part) || 0));
+  const reported = Math.max(...mods.map((m) => m.speed || 0));
+  const slow = (r) => !!(r && configured && configured < r * 0.97);
+  const rated = fromPart ? Math.max(fromPart, reported) : slow(reported) ? reported : null;
   const ddr = mods[0].type === 34 ? 5 : mods[0].type === 26 ? 4 : null;
   const speed = {
-    ...base, key: 'memSpeed', configured, rated, ddr,
-    ok: !configured || !rated ? null : configured >= rated * 0.97,
-    guide: rated && configured && configured < rated * 0.97 ? 'xmp' : null,
+    ...base, key: 'memSpeed', configured, rated, ddr, ratedFrom: fromPart ? 'part' : rated ? 'reported' : null,
+    ok: !configured || !rated ? null : !slow(rated),
+    guide: slow(rated) ? 'xmp' : null,
   };
   return x.laptop ? [chan] : [chan, speed];
 }

@@ -103,6 +103,12 @@ $payload = @{ ok = $true; data = $result } } catch { $payload = @{ ok = $false; 
     const poll = setInterval(() => {
       try { const s = fs.readFileSync(prog, 'utf8'); if (s && s !== last) { last = s; if (onProgress) onProgress(JSON.parse(s)); } } catch { /* not yet */ }
     }, 400);
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      clearInterval(poll);
+      for (const f of [out, prog, script]) fs.rm(f, { force: true }, () => {});
+      resolve({ ok: false, error: `could not start PowerShell: ${e.message}` });
+    });
     child.on('close', (code) => {
       clearTimeout(timer);
       clearInterval(poll);

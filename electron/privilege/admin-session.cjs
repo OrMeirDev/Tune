@@ -61,6 +61,7 @@ function startAdmin() {
   return new Promise((resolve) => {
     const child = spawn(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
       `try { Start-Process -FilePath '${PS}' -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File','"${script}"' -Verb RunAs -WindowStyle Hidden; exit 0 } catch { exit 1223 }`], { windowsHide: true });
+    child.on('error', (e) => { admin = null; fs.rm(dir, { recursive: true, force: true }, () => {}); resolve({ ok: false, error: `could not start PowerShell: ${e.message}` }); });
     child.on('close', async (code) => {
       if (code !== 0) { admin = null; fs.rm(dir, { recursive: true, force: true }, () => {}); return resolve({ ok: false, error: 'cancelled' }); }
       // Usually under a second; the first run can be slower while antivirus scans the new script.
@@ -123,4 +124,4 @@ function adminStop() {
   admin = null;
 }
 
-module.exports = { wait, adminCall, adminStatus, adminStart, adminStop };
+module.exports = { wait, adminCall, adminStatus, adminStart, adminStop, adminHelper };

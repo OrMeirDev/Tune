@@ -57,8 +57,11 @@ test('memory speed: below the kit rating means the XMP/EXPO profile is off', () 
   assert.deepEqual([slow.rated, slow.ok, slow.guide, slow.profile], [6000, false, 'xmp', 'XMP']);
   const [, fast] = one({ key: 'memory', cpu: 'AMD Ryzen 7', modules: [kit(6000, 'CMK32GX5M2B6000C36')] });
   assert.deepEqual([fast.ok, fast.profile], [true, 'EXPO']);
-  // Known gap (audit TUN-16): when the part number can't be read, the stick's own reported speed is
-  // used as its rating, so the speed is judged fine. To be changed to "unknown" with TUN-16.
+  // Audit TUN-16: without a readable part number the kit's rating is unknown, so the speed is
+  // unknown too, not "fine"...
   const [, unread] = one({ key: 'memory', cpu: 'Intel', modules: [kit(4800, 'UNKNOWN-PART')] });
-  assert.equal(unread.ok, true);
+  assert.deepEqual([unread.ok, unread.rated, unread.guide], [null, null, null]);
+  // ...but running below the speed the stick itself reports is certainly too slow.
+  const [, below] = one({ key: 'memory', cpu: 'Intel', modules: [kit(3600, 'UNKNOWN-PART')] });
+  assert.deepEqual([below.ok, below.rated, below.ratedFrom, below.guide], [false, 4800, 'reported', 'xmp']);
 });

@@ -1,7 +1,8 @@
 // BIOS updates for brand-name PCs, from each maker's own update catalog (the same catalogs their
 // update tools read). Every result carries the maker's SHA-256 for the file. These BIOS updates
 // run from Windows with the maker's own tool, unlike motherboard BIOS files (flashed from the BIOS).
-const { execFileSync } = require('child_process');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -24,7 +25,8 @@ async function getText(url) {
   return (await r.text()).replace(/^\ufeff/, '');
 }
 
-// Dell and HP publish their catalogs as .cab archives; Windows' own expand.exe opens them.
+// Dell and HP publish their catalogs as .cab archives; Windows' own expand.exe opens them (without
+// blocking the main process, and with a time limit).
 async function getCab(url) {
   const r = await fetch(url, { headers: UA });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -32,7 +34,7 @@ async function getCab(url) {
   try {
     fs.writeFileSync(path.join(dir, 'in.cab'), Buffer.from(await r.arrayBuffer()));
     fs.mkdirSync(path.join(dir, 'out'));
-    execFileSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'expand.exe'), [path.join(dir, 'in.cab'), '-F:*', path.join(dir, 'out')], { windowsHide: true });
+    await promisify(execFile)(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'expand.exe'), [path.join(dir, 'in.cab'), '-F:*', path.join(dir, 'out')], { windowsHide: true, timeout: 60000 });
     const [file] = fs.readdirSync(path.join(dir, 'out'));
     const buf = fs.readFileSync(path.join(dir, 'out', file));
     // Dell writes its catalogs in UTF-16 (byte order mark FF FE); HP in UTF-8.
@@ -120,8 +122,13 @@ async function oemBios({ systemMaker = '', systemModel = '', systemSku = '', mod
   else if (/^hp\b|hewlett/i.test(systemMaker)) r = await hp(model, version);
   else return null;
   if (!r) return null;
+  // A catalog field is taken as the file's SHA-256 only if it looks like one: Lenovo calls the
+  // field "CRC", and a value that isn't 64 hex characters means "no usable hash" (the download is
+  // then refused), never a false match.
+  if (r.latest) r.latest = { ...r.latest, sha256: sha256Or(r.latest.sha256) };
   return { ...r, maker: /lenovo/i.test(systemMaker) ? 'Lenovo' : /dell/i.test(systemMaker) ? 'Dell' : 'HP', model: systemModel };
 }
+const sha256Or = (v) => (/^[0-9a-f]{64}$/i.test(String(v || '').trim()) ? String(v).trim().toLowerCase() : null);
 
 // Makers whose sites only serve browsers: a search on their own site instead.
 const SITES = [[/MSI|Micro-Star/i, 'msi.com'], [/Gigabyte/i, 'gigabyte.com'], [/ASRock/i, 'asrock.com'], [/Biostar/i, 'biostar.com.tw'], [/Acer/i, 'acer.com']];
@@ -138,4 +145,4 @@ const BIOS_SOURCES = [
   { host: /^ftp(\.ext)?\.hp\.com$/, signer: /HP|Hewlett/i },
 ];
 
-module.exports = { oemBios, searchPage, BIOS_SOURCES };
+module.exports = { oemBios, searchPage, BIOS_SOURCES, sha256Or };
