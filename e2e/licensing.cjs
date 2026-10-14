@@ -5,11 +5,16 @@
 // 2) email -> 6-digit code -> Serial, by keyboard (focus moves to each field, Enter submits)
 // 3) the licence row: active, package, dates, last check; the gated request now passes the gate
 // 4) the server stops: "Check now" keeps the licence (signed expiry) and leaves the page usable;
-//    recovery without a server -> "couldn't be reached" + Try again; server back -> recovered
-// 5) the same in Hebrew (right to left), Escape closes the dialog
+//    recovery without a server -> "isn't confirmed" (never "nothing changed") + Try again; server back
+//    -> the same request recovers the licence
+// 5) the owner releases this PC on the server: "Check now" shows it in the row (never "Active"), a
+//    gated request is refused, and recovery brings the licence back
+// 6) the same in Hebrew (right to left), Escape closes the dialog
 // On Windows the profile is protected with DPAPI and the machine id is the PC's own. Elsewhere this
 // uses the app's test-only storage and machine id (development builds only): a run off Windows does
 // not prove DPAPI. Needs Node 22+ on PATH (for the PoC server). Nothing on the PC changes.
+// It passes only when every step ran and no check failed (e2e/harness.cjs): an unexpected error or a
+// timeout fails it, and the server and the throwaway folder are cleaned up either way.
 const net = require('net');
 const { EventEmitter } = require('events');
 const realConnect = net.connect;
@@ -26,6 +31,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { createRun } = require('./harness.cjs');
 
 const APP_DIR = path.join(__dirname, '..');
 const OUT_DIR = path.join(__dirname, 'output', path.basename(__filename, '.cjs'));
@@ -34,15 +40,11 @@ const work = fs.mkdtempSync(path.join(os.tmpdir(), 'tune-licensing-e2e-'));
 app.setPath('userData', path.join(work, 'profile'));
 app.on('window-all-closed', () => {});
 
-const failures = [];
-const check = (name, cond, got) => { console.log(`${cond ? 'PASS' : 'FAIL'} ${name}${got !== undefined ? ` (${JSON.stringify(got).slice(0, 300)})` : ''}`); if (!cond) failures.push(name); };
+const run = createRun({ exit: (code) => app.exit(code) });
+const { check } = run;
 let server = null;
-const finish = () => {
-  console.log(failures.length ? `${failures.length} FAILED` : 'ALL PASSED');
-  if (server) server.kill();
-  fs.rmSync(work, { recursive: true, force: true });
-  app.exit(failures.length ? 1 : 0);
-};
+run.onCleanup(() => fs.rmSync(work, { recursive: true, force: true }));
+run.onCleanup(() => { if (server) server.kill(); });
 
 // ---- the licensing server PoC, on a fixed free port (so it can be stopped and started again) ----
 const DB = path.join(work, 'licensing.sqlite');
@@ -62,9 +64,11 @@ async function post(port, route, body, admin) {
   return res.json();
 }
 // the 6-digit code from the PoC's outbox (its stand-in for email), read with Node outside the app
+const activeDevice = () => execFileSync('node', ['-e', `const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync(process.argv[1]); process.stdout.write(db.prepare("SELECT id FROM devices WHERE state = 'active'").get().id);`, DB], { env: { ...process.env, NODE_NO_WARNINGS: '1' }, encoding: 'utf8' });
 const mailCode = (email) => execFileSync('node', ['-e', `const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync(process.argv[1]); const m = db.prepare('SELECT body FROM outbox WHERE to_email = ? ORDER BY id DESC').get(process.argv[2]); process.stdout.write(/\\b(\\d{6})\\b/.exec(m.body)[1]);`, DB, email], { env: { ...process.env, NODE_NO_WARNINGS: '1' }, encoding: 'utf8' });
 
-(async () => {
+run.guard(async () => {
+  run.timeout(240000);
   const port = await freePort();
   server = await startServer(port);
   const keys = JSON.parse(fs.readFileSync(KEYS, 'utf8'));
@@ -83,7 +87,6 @@ const mailCode = (email) => execFileSync('node', ['-e', `const { DatabaseSync } 
   await app.whenReady();
   require(path.join(APP_DIR, 'electron', 'main.cjs'));
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  setTimeout(() => { console.log('FAIL timeout'); finish(); }, 240000);
   let win; while (!(win = BrowserWindow.getAllWindows()[0])) await wait(20);
   const errors = [];
   win.webContents.on('console-message', (e, level, message) => { if (level >= 3) errors.push(message); });
@@ -159,8 +162,8 @@ const mailCode = (email) => execFileSync('node', ['-e', `const { DatabaseSync } 
   await until(dialog, (v) => v && /Verified/.test(v.text));
   await stopServer();
   await click('Recover my license on this PC');
-  m = await until(dialog, (v) => v && /couldn't be reached/.test(v.text));
-  check("4 recovery without a server: said plainly, with Try again", /couldn't be reached/.test(m?.text || '') && /Try again/.test(m.text), m?.text);
+  m = await until(dialog, (v) => v && /isn't confirmed/.test(v.text));
+  check("4 recovery without a server: not confirmed (never \"nothing changed\"), with Try again", /isn't confirmed/.test(m?.text || '') && !/nothing changed/i.test(m.text) && /Try again/.test(m.text), m?.text);
   await shot('4-en-unavailable.png');
   server = await startServer(port);
   await click('Try again');
@@ -168,23 +171,42 @@ const mailCode = (email) => execFileSync('node', ['-e', `const { DatabaseSync } 
   check('4 server back: Try again recovers the same licence', /back on this PC/.test(m?.text || ''), m?.text);
   await click('Done');
 
-  // 5) Hebrew, right to left
+  // 5) a release confirmed by the server (the owner, verified, through the server's API)
+  const challenge = await post(port, '/v1/owner/challenge', { email: 'owner@example.com' });
+  const verified = await post(port, '/v1/owner/verify', { challengeId: challenge.challengeId, code: mailCode('owner@example.com') });
+  const released = await post(port, '/v1/device/release', { ownerToken: verified.ownerToken, deviceId: activeDevice() });
+  check('5 the server released this PC', released.result === 'ok', released);
+  await click('Check now');
+  r = await until(row, (v) => v && /released from the license/.test(v.text));
+  check('5 "Check now" shows the release in the row, not "Active"', /released from the license/.test(r?.text || '') && !/^Active\./m.test(r.text), r?.text);
+  const deniedAfter = await js(`window.tune.junkClean(['not-a-category'])`);
+  check('5 after the release a gated request is refused', deniedAfter?.error === 'not entitled', deniedAfter);
+  await shot('5-en-released.png');
+  await click('Activate or recover');
+  m = await until(dialog, (v) => v && /Recover my license on this PC/.test(v.text));
+  await click('Recover my license on this PC');
+  m = await until(dialog, (v) => v && /back on this PC/.test(v.text));
+  check('5 recovery the server approves makes this PC active again', /back on this PC/.test(m?.text || ''), m?.text);
+  await click('Done');
+  r = await until(row, (v) => v && /^Active\./m.test(v.text));
+  check('5 the row is active again', /^Active\./m.test(r?.text || ''), r?.text);
+
+  // 6) Hebrew, right to left
   await lang('he');
   r = await until(row, (v) => v && /פעיל\./.test(v.text));
-  check('5 Hebrew: the licence row', /פעיל\./.test(r?.text || '') && /tune-pro/.test(r.text), r?.text);
+  check('6 Hebrew: the licence row', /פעיל\./.test(r?.text || '') && /tune-pro/.test(r.text), r?.text);
   await js(`[...document.querySelectorAll('.license-setting > .header-actions button')].at(-1).click()`);
   m = await until(dialog, (v) => !!v);
-  check('5 a new visit to the dialog does not repeat the earlier success', !/חזר למחשב הזה/.test(m?.text || '') && /התחל מחדש/.test(m.text), m?.text);
+  check('6 a new visit to the dialog does not repeat the earlier success', !/חזר למחשב הזה/.test(m?.text || '') && /התחל מחדש/.test(m.text), m?.text);
   await click('התחל מחדש');
   m = await until(dialog, (v) => v && v.focus === 'lic-email');
-  check('5 Hebrew: the dialog is right to left and starts in the email field', m?.dir === 'rtl' && /הפעלת Tune/.test(m.text) && m.focus === 'lic-email', m);
+  check('6 Hebrew: the dialog is right to left and starts in the email field', m?.dir === 'rtl' && /הפעלת Tune/.test(m.text) && m.focus === 'lic-email', m);
   const overlap = await js(`(() => { const els = [...document.querySelectorAll('.license-dialog label, .license-dialog button, .license-dialog input, .license-dialog .dmeta')].map((e) => e.getBoundingClientRect()); const box = document.querySelector('.license-dialog').getBoundingClientRect(); return els.filter((r) => r.width && (r.left < box.left - 1 || r.right > box.right + 1)).length; })()`);
-  check('5 Hebrew: nothing sticks out of the dialog', overlap === 0, overlap);
-  await shot('5-he-dialog.png');
+  check('6 Hebrew: nothing sticks out of the dialog', overlap === 0, overlap);
+  await shot('6-he-dialog.png');
   await escape();
-  check('5 Escape closes the dialog', !(await dialog()));
-  await shot('5-he-settings.png');
+  check('6 Escape closes the dialog', !(await dialog()));
+  await shot('6-he-settings.png');
 
   check('no renderer errors', errors.length === 0, errors);
-  finish();
-})().catch((e) => { console.log(`FAIL ${e.stack}`); finish(); });
+});
