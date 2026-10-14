@@ -27,7 +27,7 @@ export function SettingsPage({ version, status, onCheck, settings, onPickDir, on
           <div><div className="setting-title">{t('se.sound')}</div><div className="row-meta">{t('se.soundNote')}</div></div>
           <div className="acts">
             <button className="btn-ghost" onClick={playChime}>{t('se.soundTry')}</button>
-            <button className={`toggle ${settings?.sound !== false ? 'on' : ''}`} aria-label={t('se.sound')} onClick={() => onSound(settings?.sound === false)} />
+            <button className={`toggle ${settings?.sound !== false ? 'on' : ''}`} role="switch" aria-checked={settings?.sound !== false} aria-label={t('se.sound')} onClick={() => onSound(settings?.sound === false)} />
           </div>
         </div>
         <div className="setting">

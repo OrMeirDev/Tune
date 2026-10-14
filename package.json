@@ -46,7 +46,8 @@
       {
         "from": "service/bin",
         "to": "service"
-      }
+      },
+      "THIRD_PARTY_NOTICES.md"
     ],
     "publish": [
       {

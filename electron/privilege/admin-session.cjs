@@ -14,7 +14,7 @@ const { JUNK, OPS_TABLE, STARTUP } = require('./operations.cjs');
 // user), and finishes an operation that is still running when the 10 minutes end.
 const ADMIN_WINDOW_S = 10 * 60;
 
-let admin = null;
+let admin = null; // { dir }
 
 const adminHelper = (dir) => `${PRELUDE}$progressFile = $null
 function Report-Progress($o) { if ($progressFile) { try { [IO.File]::WriteAllText($progressFile, ($o | ConvertTo-Json -Compress)) } catch {} } }

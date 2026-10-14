@@ -8,7 +8,7 @@ export function ProgressPill({ p, fallback }) {
   const label = ['auth', 'restore', 'prepare', 'download', 'install', 'service', 'pawnio', 'start'].includes(p?.phase) ? t(`prog.${p.phase}`) : fallback;
   const pct = p && ['download', 'install'].includes(p.phase) && p.percent != null ? p.percent : null;
   return (
-    <span className="pill prog-pill">
+    <span className="pill prog-pill" role="status" aria-live="polite">
       <Loader2 size={13} className="spin" />
       {label}{pct != null ? ` ${pct}%` : p && ['download', 'install'].includes(p.phase) ? '…' : ''}
       {p?.count > 1 && p.index ? t('prog.ofN', { i: p.index, n: p.count }) : ''}

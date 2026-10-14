@@ -20,7 +20,7 @@ export function StartupPage({ startup, onToggle, busy, prog }) {
             <div className="acts">
               {s.admin && <span className="src">{t('st.admin')}</span>}
               {busy === s.source + s.key ? <ProgressPill p={prog[busy]} fallback={t('prog.changing')} />
-                : <button className={`toggle ${s.enabled ? 'on' : ''}`} aria-label={t(s.enabled ? 'st.turnOff' : 'st.turnOn')} disabled={!!busy} onClick={() => onToggle(s, !s.enabled)} />}
+                : <button className={`toggle ${s.enabled ? 'on' : ''}`} role="switch" aria-checked={!!s.enabled} aria-label={`${s.name}: ${t(s.enabled ? 'st.turnOff' : 'st.turnOn')}`} disabled={!!busy} onClick={() => onToggle(s, !s.enabled)} />}
             </div>
           </div>
         ))}

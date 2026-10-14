@@ -1,13 +1,18 @@
 // The fixed operations that need admin rights (PowerShell bodies), and the scripts they share. Both
 // the background service and the admin session run exactly these; nothing else is ever elevated.
-// Windows makes at most one restore point per 24 hours and only warns when it skips one, so
-// compare sequence numbers: $restore ends up 'created', or 'recent' when a point from today exists.
+// Windows makes at most one restore point per 24 hours and only warns when it skips one. So the
+// outcome is read from the restore points themselves: 'created' (a new one appeared), 'recent' (none
+// was made, but one from the last 24 hours exists, verified by its date), or 'unavailable' (neither:
+// System Protection is off or Windows declined). Never 'recent' without a point to go back to.
 const restorePS = (label) => `
 Enable-ComputerRestore -Drive "$env:SystemDrive\\" -ErrorAction SilentlyContinue
-$seq = { (@(Get-ComputerRestorePoint -ErrorAction SilentlyContinue) | Measure-Object -Property SequenceNumber -Maximum).Maximum }
-$before = & $seq
+$newest = { @(Get-ComputerRestorePoint -ErrorAction SilentlyContinue) | Sort-Object SequenceNumber | Select-Object -Last 1 }
+$before = (& $newest).SequenceNumber
 Checkpoint-Computer -Description '${String(label).replace(/'/g, "''")}' -RestorePointType MODIFY_SETTINGS -WarningAction SilentlyContinue
-$restore = if ((& $seq) -gt $before) { 'created' } else { 'recent' }`;
+$now = & $newest
+$restore = if ($now -and $now.SequenceNumber -gt $before) { 'created' }
+  elseif ($now -and [Management.ManagementDateTimeConverter]::ToDateTime($now.CreationTime) -gt (Get-Date).AddHours(-24)) { 'recent' }
+  else { 'unavailable' }`;
 
 // Windows Update only reports percentages to a callback object, so these empty COM callbacks
 // exist just to be handed over; the script polls the job's progress itself.
@@ -89,19 +94,29 @@ $cats = @(
   @{ key = 'dumps'; paths = @("$env:SystemRoot\\Minidump", "$env:SystemRoot\\LiveKernelReports"); admin = $true }
   @{ key = 'appDumps'; paths = @("$env:LOCALAPPDATA\\CrashDumps"); admin = $false }
 )
+# Every file below a category's folder, without ever entering a junction or symbolic link: one of
+# those inside a temp folder could lead anywhere on the disk. Linked files are left alone too.
+function Under($root) {
+  $todo = New-Object System.Collections.Generic.Stack[string]; $todo.Push($root)
+  while ($todo.Count) {
+    foreach ($i in @(Get-ChildItem -LiteralPath $todo.Pop() -Force -ErrorAction SilentlyContinue)) {
+      if ($i.Attributes -band [IO.FileAttributes]::ReparsePoint) { continue }
+      if ($i.PSIsContainer) { $todo.Push($i.FullName) } else { $i } } } }
 function Files($c) {
   # Temp folders: only files untouched for a day, so programs that are open right now keep theirs.
   $cutoff = if ($c.minAgeHours) { (Get-Date).AddHours(-$c.minAgeHours) } else { $null }
   foreach ($p in $c.paths) { if (Test-Path -LiteralPath $p) {
-    $f = if ($c.filter) { Get-ChildItem -LiteralPath $p -Filter $c.filter -File -Force -ErrorAction SilentlyContinue } else { Get-ChildItem -LiteralPath $p -Recurse -File -Force -ErrorAction SilentlyContinue }
+    $f = if ($c.filter) { Get-ChildItem -LiteralPath $p -Filter $c.filter -File -Force -ErrorAction SilentlyContinue | Where-Object { -not ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) } } else { Under $p }
     if ($cutoff) { $f | Where-Object { $_.LastWriteTime -lt $cutoff } } else { $f } } } }`;
 
-// Only the fixed categories above can be cleaned, whatever keys arrive.
+// Only the fixed categories above can be cleaned, whatever keys arrive. Windows Update's download
+// cache is left alone while Windows is installing or downloading updates (its workers are running).
 const CLEAN_OP = `
-$want = @($req.keys | ForEach-Object { [string]$_ }); $freed = [int64]0; $skipped = 0
+$want = @($req.keys | ForEach-Object { [string]$_ }); $freed = [int64]0; $skipped = 0; $busy = @()
 foreach ($c in $cats) { if ($want -notcontains $c.key) { continue }
+  if ($c.key -eq 'wuCache' -and @(Get-Process -Name TiWorker, TrustedInstaller, MoUsoCoreWorker -ErrorAction SilentlyContinue).Count) { $busy += $c.key; continue }
   foreach ($f in @(Files $c)) { try { $len = $f.Length; Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop; $freed += $len } catch { $skipped++ } } }
-$result = @{ freed = $freed; skipped = $skipped }`;
+$result = @{ freed = $freed; skipped = $skipped; busy = $busy }`;
 
 // Same switches Task Manager uses: StartupApproved values starting 02 = on, 03 = off.
 const STARTUP = `
@@ -127,8 +142,6 @@ $result = $(if ($req.enable -eq $true) { 'enabled' } else { 'disabled' })`;
 const HAGS_OP = `
 Set-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers' -Name HwSchMode -Value 2 -Type DWord
 $result = 'reboot'`;
-
-// { dir }
 
 // The privileged operations, shared word for word by the admin session and the background service.
 const OPS_TABLE = () => `

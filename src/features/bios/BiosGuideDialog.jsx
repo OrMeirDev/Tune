@@ -1,7 +1,9 @@
 // How to install a BIOS update, per maker.
+import { useId } from 'react';
 import { AlertTriangle, Download, ExternalLink, X } from 'lucide-react';
 import { api } from '../../api.js';
 import { ProgressPill } from '../../components/TaskProgress.jsx';
+import { DialogFrame } from '../../components/DialogFrame.jsx';
 import { useT } from '../../i18n.js';
 import { ltr, rich } from '../../presentation/format.jsx';
 
@@ -9,15 +11,15 @@ import { ltr, rich } from '../../presentation/format.jsx';
 // and explains the maker's own update tool.
 export function BiosGuide({ bios, onClose, onDownload, busy, prog }) {
   const t = useT();
+  const titleId = useId();
   if (!bios) return null;
   const l = bios.latest;
   const m = { maker: bios.maker };
   return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal guide" onClick={(e) => e.stopPropagation()}>
+    <DialogFrame onClose={onClose} labelledBy={titleId} className="guide">
         <div className="modal-head">
           <div>
-            <h2>{t('guide.title', { model: bios.model })}</h2>
+            <h2 id={titleId}>{t('guide.title', { model: bios.model })}</h2>
             <div className="dmeta">{t('guide.installed', { v: bios.installed, d: bios.installedDate })} {t('arrow')} {t('guide.available')} <b>{l.version}</b> ({l.date}) · {ltr(l.size)}</div>
           </div>
           <button className="icon-btn ghost" onClick={onClose} aria-label={t('close')}><X size={16} /></button>
@@ -38,7 +40,6 @@ export function BiosGuide({ bios, onClose, onDownload, busy, prog }) {
             : <button className="btn-primary" onClick={onDownload}><Download size={14} /> {t('guide.download', { size: ltr(l.size) })}</button>}
           <button className="btn-ghost" onClick={() => api.openLink(bios.page)}><ExternalLink size={14} /> {t('guide.page')}</button>
         </div>
-      </div>
-    </div>
+    </DialogFrame>
   );
 }

@@ -15,7 +15,7 @@ async function junkClean(keys) {
   const all = keys.map((k) => String(k).replace(/[^a-zA-Z]/g, ''));
   const mine = all.filter((k) => !ADMIN_JUNK.includes(k));
   const sys = all.filter((k) => ADMIN_JUNK.includes(k));
-  const total = { freed: 0, skipped: 0 };
+  const total = { freed: 0, skipped: 0, busy: [] };
   if (mine.length) {
     const r = await runPS(`$req = @{ keys = @(${mine.map((k) => `'${k}'`).join(',')}) }${JUNK}${CLEAN_OP}`);
     if (!r.ok) return r;
@@ -24,7 +24,7 @@ async function junkClean(keys) {
   if (sys.length) {
     const r = await privileged({ op: 'clean', keys: sys }, { timeoutMs: 10 * 60 * 1000 });
     if (!r.ok && !mine.length) return r;
-    if (r.ok) { total.freed += r.data.freed; total.skipped += r.data.skipped; } else total.adminError = r.error;
+    if (r.ok) { total.freed += r.data.freed; total.skipped += r.data.skipped; total.busy = [].concat(r.data.busy || []); } else total.adminError = r.error;
     return { ok: true, data: total, adminUntil: r.adminUntil };
   }
   return { ok: true, data: total };
