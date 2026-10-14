@@ -3,7 +3,11 @@ const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 const sys = require('./system.cjs');
+const { pathToFileURL } = require('url');
 const { hardwareReport } = require('./report.cjs');
+const { createChannels, CACHE_KEYS } = require('./ipc/channels.cjs');
+const { createOffers } = require('./ipc/offers.cjs');
+const { isTrustedSender, dispatch, pageOf } = require('./ipc/guard.cjs');
 
 // ---------- history of everything Tune changed ----------
 
@@ -42,10 +46,6 @@ autoUpdater.on('download-progress', (p) => sendUpdate({ state: 'downloading', pe
 autoUpdater.on('update-downloaded', (info) => sendUpdate({ state: 'ready', version: info.version }));
 autoUpdater.on('error', (e) => sendUpdate({ state: 'error', message: String(e?.message || e).slice(0, 200) }));
 
-ipcMain.handle('update:check', () => (app.isPackaged ? autoUpdater.checkForUpdates().then(() => true).catch(() => false) : false));
-ipcMain.handle('update:download', () => autoUpdater.downloadUpdate().catch(() => null));
-ipcMain.handle('update:install', () => autoUpdater.quitAndInstall(true, true));
-ipcMain.handle('app:version', () => app.getVersion());
 
 // ---------- system ----------
 
@@ -65,15 +65,13 @@ function prewarm() {
 const warmOr = (key, fn) => { const p = warm.get(key); warm.delete(key); return p || fn(); };
 
 // The last results, so the next launch can show them at once while fresh ones load.
-const CACHE_KEYS = ['hw', 'wu', 'gpu', 'bios', 'junk', 'startup', 'recs', 'scanAt'];
 const cacheFile = () => path.join(app.getPath('userData'), 'cache.json');
 let cache = null;
 const readCache = () => {
   if (!cache) { try { cache = JSON.parse(fs.readFileSync(cacheFile(), 'utf8')); } catch { cache = {}; } }
   return cache;
 };
-ipcMain.handle('cache:get', () => readCache());
-ipcMain.handle('cache:set', (_e, key, value) => {
+function writeCache(key, value) {
   if (!CACHE_KEYS.includes(key)) return;
   const c = readCache();
   c[key] = value;
@@ -82,112 +80,47 @@ ipcMain.handle('cache:set', (_e, key, value) => {
     fs.writeFileSync(`${cacheFile()}.tmp`, JSON.stringify(c));
     fs.renameSync(`${cacheFile()}.tmp`, cacheFile());
   } catch { /* the cache is only a convenience */ }
-});
+}
 
-ipcMain.handle('hw:scan', () => warmOr('hw', sys.scanHardware));
-ipcMain.handle('drv:updates', () => warmOr('wu', sys.driverUpdates));
-ipcMain.handle('drv:gpu', (_e, gpus, amdSoftware) => sys.gpuVendorCheck(gpus, amdSoftware));
-ipcMain.handle('drv:install', async (_e, items, key) => {
-  const r = await sys.installDrivers(items.map((i) => i.id), progressTo(key));
-  if (r.ok) addHistory('drivers', { items: items.map((i) => i.title), reboot: r.data.reboot, restore: r.data.restore });
-  return r;
-});
-ipcMain.handle('drv:gpuInstaller', async (_e, url, key) => {
-  const r = await sys.downloadGpuInstaller(url, getSettings().saveDir, progressTo(key));
-  if (r.ok) { shell.openPath(r.data); addHistory('gpu', { file: path.basename(r.data) }); }
-  return r;
-});
-ipcMain.handle('bios:check', (_e, board) => sys.biosCheck(board));
-ipcMain.handle('bios:download', async (_e, latest, key) => {
-  const r = await sys.downloadBios(latest, getSettings().saveDir, progressTo(key));
-  if (r.ok) { shell.showItemInFolder(r.data); addHistory('bios', { file: path.basename(r.data), version: latest.version }); }
-  return r;
-});
-ipcMain.handle('dev:enable', async (_e, dev) => {
-  const r = await sys.enableDevice(dev.id);
-  if (r.ok) addHistory('enable', { name: dev.name });
-  return r;
-});
-
-ipcMain.handle('hw:export', (_e, hw, format) => {
+function exportHardware(hw, format) {
   const stamp = new Date().toISOString().slice(0, 16).replace('T', '-').replace(':', '');
   const file = path.join(getSettings().saveDir, `Tune-hardware-${stamp}.${format === 'csv' ? 'csv' : 'txt'}`);
   fs.writeFileSync(file, '﻿' + hardwareReport(hw, format), 'utf8'); // BOM: Excel and Notepad read it as UTF-8
   shell.showItemInFolder(file);
   return { ok: true, data: file };
-});
-
-// Folders shown on the cleanup page open in Explorer; only folders the last scan reported.
-let junkDirs = new Set();
-ipcMain.handle('junk:scan', async () => {
-  const r = await warmOr('junk', sys.junkScan);
-  if (r.ok) junkDirs = new Set([].concat(r.data || []).flatMap((c) => [].concat(c.dirs || [])));
-  return r;
-});
-ipcMain.handle('folder:open', (_e, dir) => (junkDirs.has(dir) ? shell.openPath(dir) : null));
-ipcMain.handle('junk:clean', async (_e, cats) => {
-  const r = await sys.junkClean(cats.map((c) => c.key));
-  if (r.ok) addHistory('clean', { cats: cats.map((c) => c.key), freed: r.data.freed });
-  return r;
-});
-ipcMain.handle('startup:list', () => warmOr('startup', sys.startupList));
-ipcMain.handle('startup:toggle', async (_e, item, enable) => {
-  const r = await sys.startupToggle(item.source, item.key, enable);
-  if (r.ok) addHistory('startup', { name: item.name, enabled: enable });
-  return r;
-});
-ipcMain.handle('perf:get', () => sys.performance());
-ipcMain.handle('perf:sensors', () => sys.sensors());
-ipcMain.handle('rec:list', () => warmOr('recs', sys.recommendations));
-ipcMain.handle('rec:apply', async (_e, rec) => {
-  const r = await sys.applyRecommendation(rec.key);
-  if (r.ok) addHistory('setting', { key: rec.key });
-  return r;
-});
-ipcMain.handle('restore:create', async () => {
-  const r = await sys.createRestorePoint('Tune - manual restore point');
-  if (r.ok && r.data === 'created') addHistory('restore', {});
-  return r;
-});
-ipcMain.handle('restore:open', () => sys.openSystemRestore());
-ipcMain.handle('history:get', () => readHistory());
-ipcMain.handle('link:open', (_e, url) => (/^https:\/\//.test(url) ? shell.openExternal(url) : null));
+}
 
 // The background service ships in resources/service (service/bin while developing).
 const serviceDir = () => (app.isPackaged ? path.join(process.resourcesPath, 'service') : path.join(__dirname, '..', 'service', 'bin'));
-ipcMain.handle('service:status', async () => {
-  const r = await sys.serviceStatus();
-  return { ...r.data, bundled: sys.SERVICE_VERSION };
-});
-ipcMain.handle('service:install', async () => {
-  const r = await sys.installService(serviceDir(), progressTo('service'));
-  if (r.ok) addHistory('service', { installed: true, pawnio: r.data.pawnio });
-  return r;
-});
-ipcMain.handle('service:uninstall', async () => {
-  const r = await sys.uninstallService();
-  if (r.ok) addHistory('service', { installed: false });
-  return r;
-});
 
-ipcMain.handle('admin:status', () => sys.adminStatus());
-ipcMain.handle('admin:start', () => sys.adminStart());
-ipcMain.handle('admin:stop', () => sys.adminStop());
+// ---------- requests from the window (see ipc/: who may ask, and what) ----------
 
-ipcMain.handle('settings:get', () => getSettings());
-ipcMain.handle('settings:setLang', (_e, lang) => {
-  saveSettings({ ...getSettings(), lang: lang === 'he' ? 'he' : 'en' });
-  return getSettings();
+// The page Tune shows; requests and navigation are accepted only from it.
+const pageUrl = process.env.VITE_DEV ? 'http://localhost:5175/' : pathToFileURL(path.join(__dirname, '..', 'dist', 'index.html')).href;
+// What the main process found itself; actions point at these by ID.
+const offers = createOffers();
+const channels = createChannels({
+  sys, offers, shell, progressTo, warmOr, serviceDir, exportHardware,
+  appVersion: () => app.getVersion(),
+  updater: {
+    check: () => (app.isPackaged ? autoUpdater.checkForUpdates().then(() => true).catch(() => false) : false),
+    download: () => autoUpdater.downloadUpdate().catch(() => null),
+    install: () => autoUpdater.quitAndInstall(true, true),
+  },
+  cache: { read: readCache, write: writeCache },
+  history: { add: addHistory, read: readHistory },
+  settings: {
+    get: getSettings,
+    save: saveSettings,
+    pickDir: async () => {
+      const r = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory', 'createDirectory'], defaultPath: getSettings().saveDir });
+      if (!r.canceled && r.filePaths[0]) saveSettings({ ...getSettings(), saveDir: r.filePaths[0] });
+      return getSettings();
+    },
+  },
 });
-ipcMain.handle('settings:setSound', (_e, on) => {
-  saveSettings({ ...getSettings(), sound: !!on });
-  return getSettings();
-});
-ipcMain.handle('settings:pickDir', async () => {
-  const r = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory', 'createDirectory'], defaultPath: getSettings().saveDir });
-  if (!r.canceled && r.filePaths[0]) saveSettings({ ...getSettings(), saveDir: r.filePaths[0] });
-  return getSettings();
-});
+const trusted = (event) => isTrustedSender(event, { webContents: mainWindow?.webContents, pageUrl });
+for (const [name, channel] of Object.entries(channels)) ipcMain.handle(name, (event, ...args) => dispatch(channel, event, args, trusted));
 
 // ---------- window ----------
 
@@ -204,9 +137,13 @@ function createWindow() {
     backgroundColor: '#f4f8fe',
     autoHideMenuBar: true,
     show: false,
-    webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.cjs') },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(__dirname, 'preload.cjs') },
   });
   mainWindow = win;
+  // The window only ever shows Tune's own page: links open in the browser through link:open, never here.
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', (e, url) => { if (pageOf(url) !== pageOf(pageUrl)) e.preventDefault(); });
+  win.webContents.on('will-attach-webview', (e) => e.preventDefault());
   // Shown once the page has drawn, so it opens complete instead of blank.
   win.once('ready-to-show', () => win.show());
   win.webContents.once('did-finish-load', () => {
@@ -214,8 +151,7 @@ function createWindow() {
     setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 3000);
     setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 4 * 60 * 60 * 1000);
   });
-  if (process.env.VITE_DEV) win.loadURL('http://localhost:5175');
-  else win.loadFile(path.join(__dirname, '..', 'dist', 'index.html'));
+  win.loadURL(pageUrl);
 }
 
 // One Tune at a time: opening it again brings the open window to the front instead.

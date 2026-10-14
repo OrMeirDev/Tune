@@ -55,11 +55,11 @@ export function useScanResults({ setMsg }) {
     const h = await api.scanHardware();
     if (h.ok) { setHw(h.data); markFresh('hw', h.data); }
     step(2, 'scan.s2');
-    const board = h.ok ? { maker: h.data.boardMaker, model: h.data.boardModel, version: h.data.bios.version, date: h.data.bios.date, systemMaker: h.data.systemMaker, systemModel: h.data.systemModel, systemSku: h.data.systemSku } : null;
     const [w, g, b] = await Promise.all([
       api.driverUpdates(),
-      h.ok ? api.gpuCheck(h.data.gpus, h.data.amdSoftware) : Promise.resolve({ ok: false }),
-      board ? api.biosCheck(board) : Promise.resolve({ ok: false }),
+      // the GPUs and the board are the ones the main process' own hardware scan found
+      h.ok ? api.gpuCheck() : Promise.resolve({ ok: false }),
+      h.ok ? api.biosCheck() : Promise.resolve({ ok: false }),
     ]);
     // A failed check keeps the last answer on screen (marked as not checked) instead of turning
     // into "nothing to update".

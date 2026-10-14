@@ -8,8 +8,11 @@ Hebrew (RTL).
 
 - Drivers come only from official, verified sources; nothing is installed without a deliberate click.
 - CPU/GPU monitoring is read-only. Never touch coolers, fan or motherboard controllers, or power supplies.
-- Machine changes go through the fixed operations in `electron/system.cjs` / the service; no
-  arbitrary scripts from the renderer.
+- Machine changes go through the fixed operations in `electron/privilege/operations.cjs` / the service;
+  no arbitrary scripts from the renderer.
+- The window is untrusted: every request is checked in `electron/ipc/` (sender, argument shape), and
+  actions carry only an ID of something the main process found itself; never a URL, hash, path or
+  descriptor from the window. A new IPC channel goes in `ipc/channels.cjs` with its argument rules.
 - A result the app couldn't check is shown as unchecked, never as fine (see `src/domain/scan-verdict.mjs`).
 
 ## Structure (renderer, `src/`)
@@ -37,6 +40,7 @@ a time, progress, the result banner), `app/useCommands.js` (what each button run
 | Folder / file | Owns | May require |
 | --- | --- | --- |
 | `main.cjs`, `preload.cjs` | windows, IPC, the bridge | `system.cjs`, `report.cjs`, `oem-bios.cjs` |
+| `ipc/` | every request from the window: who may send it (`guard.cjs`), its exact arguments and what it runs (`channels.cjs`), and what the main process found itself (`offers.cjs`) | `ipc/` only (operations are injected) |
 | `system.cjs` | facade: the one interface `main.cjs` uses (same exports as before the split) | everything below |
 | `features/` | hardware, drivers, gpu-drivers, bios, cleanup, startup, sensors, recommendations, restore | `infra/`, `domain/`, `privilege/` |
 | `privilege/operations.cjs` | the fixed admin operations (PowerShell bodies) — the only code ever elevated | – |

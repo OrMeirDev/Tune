@@ -117,3 +117,10 @@ test('no require cycles in the main process', () => {
   };
   for (const f of elGraph.keys()) visit(f, []);
 });
+
+test('the request layer (ipc/) gets the Windows operations injected, never requires them', () => {
+  for (const [f, deps] of elGraph) {
+    if (!f.startsWith('ipc/')) continue;
+    for (const d of deps) assert.ok(!/^(features|privilege|infra)\//.test(d) && d !== 'system.cjs', `${f} requires ${d}`);
+  }
+});
