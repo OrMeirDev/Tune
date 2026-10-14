@@ -1,3 +1,13 @@
+// One CSV cell, quoted. Text that a spreadsheet would run as a formula (starting with = + - @, a
+// tab or a carriage return) gets a leading apostrophe so it stays literal text; plain numbers such
+// as -5 stay numbers.
+const FORMULA_START = /^[=+\-@\t\r]/;
+function csvCell(v) {
+  let s = String(v ?? '');
+  if (FORMULA_START.test(s) && !/^-?\d+(\.\d+)?$/.test(s)) s = `'${s}`;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
 // Hardware list as a spreadsheet (CSV, opens in Excel) or a plain-text report, in English so it
 // can be pasted into a support ticket or forum as is. `hw` is the result of scanHardware().
 function hardwareReport(hw, format) {
@@ -8,7 +18,7 @@ function hardwareReport(hw, format) {
   ];
   const devices = [...(hw.devices || [])].sort((a, b) => `${a.cls}${a.name}`.localeCompare(`${b.cls}${b.name}`));
   if (format === 'csv') {
-    const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const esc = csvCell;
     return [
       ...summary.map((r) => r.map(esc).join(',')), '',
       ['Device', 'Class', 'Manufacturer', 'Driver provider', 'Driver version', 'Driver date', 'Status', 'Hardware ID', 'Device ID'].map(esc).join(','),
@@ -29,4 +39,4 @@ function hardwareReport(hw, format) {
   return lines.join('\r\n');
 }
 
-module.exports = { hardwareReport };
+module.exports = { hardwareReport, csvCell };

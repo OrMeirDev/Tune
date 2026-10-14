@@ -9,6 +9,7 @@ import {
 import brandLockup from './assets/brand/logo-lockup.svg';
 
 import { LangContext, makeT, useT } from './i18n.js';
+import { scanVerdict, sourcesFrom } from './domain/scan-verdict.mjs';
 
 const api = window.tune;
 
@@ -248,7 +249,21 @@ function AllGood({ soundKey }) {
   );
 }
 
-function UpdatesPage({ hw, wu, gpu, bios, scan, soundKey, onScan, onInstall, onGpu, onBiosDownload, onGuide, onEnable, busy, prog }) {
+// A scan where a check failed: nothing to install was found, but that isn't known for sure, so it
+// says which check didn't answer instead of celebrating.
+function ScanIncomplete({ list, onScan, busy }) {
+  const t = useT();
+  return (
+    <div className="scan-incomplete" role="status">
+      <span className="si-icon"><AlertTriangle size={26} /></span>
+      <div className="si-title">{t('up.incompleteTitle')}</div>
+      <div className="si-sub">{t('up.incomplete', { list })}</div>
+      <button className="btn-primary" onClick={onScan} disabled={!!busy}><ScanSearch size={14} /> {t('up.scanAgain')}</button>
+    </div>
+  );
+}
+
+function UpdatesPage({ hw, wu, gpu, bios, sources, scan, soundKey, onScan, onInstall, onGpu, onBiosDownload, onGuide, onEnable, busy, prog }) {
   const t = useT();
   const loading = !!scan.running;
   const devByHwid = useMemo(() => {
@@ -264,6 +279,8 @@ function UpdatesPage({ hw, wu, gpu, bios, scan, soundKey, onScan, onInstall, onG
   const biosNewer = bios?.supported && bios.newer && bios.latest?.url ? bios : null;
   const problems = hw?.problems || [];
   const total = (wu?.length || 0) + gpuNewer.length + (biosNewer ? 1 : 0);
+  const verdict = scanVerdict({ running: loading, sources, total });
+  const failedList = verdict.failed.map((k) => t(`src.${k}`)).join(', ');
 
   return (
     <>
@@ -290,7 +307,9 @@ function UpdatesPage({ hw, wu, gpu, bios, scan, soundKey, onScan, onInstall, onG
       </div>
       <section className="panel">
         <div className="panel-title">{t('up.available')} {loading && <Loader2 size={15} className="spin" />}</div>
-        {!loading && total === 0 && <AllGood soundKey={soundKey} />}
+        {verdict.state === 'allGood' && <AllGood soundKey={soundKey} />}
+        {verdict.state === 'incomplete' && <ScanIncomplete list={failedList} onScan={onScan} busy={busy} />}
+        {verdict.state === 'updates' && verdict.failed.length > 0 && <div className="finding warn partial-scan"><AlertTriangle size={15} /><span>{t('up.partial', { list: failedList })}</span></div>}
         {biosNewer && (
           <div className="drow">
             <span className="dicon"><CircuitBoard size={17} /></span>
@@ -952,6 +971,8 @@ export default function App() {
   const [wu, setWu] = useState(null);
   const [gpu, setGpu] = useState(null);
   const [bios, setBios] = useState(null);
+  // Whether each check of the last scan answered (see domain/scan-verdict.mjs).
+  const [sources, setSources] = useState({});
   const [scan, setScan] = useState({ running: true, step: 0, total: 3, label: '', at: null });
   const [junk, setJunk] = useState(null);
   const [startup, setStartup] = useState(null);
@@ -1000,8 +1021,9 @@ export default function App() {
     const h = await api.scanHardware();
     if (h.ok) { setHw(h.data); markFresh('hw', h.data); }
     const w = await api.driverUpdates();
-    setWu(w.ok ? [].concat(w.data || []) : []);
-    if (w.ok) markFresh('wu', [].concat(w.data || []));
+    // a failed check keeps the last answer on screen, marked as not checked
+    if (w.ok) { setWu([].concat(w.data || [])); markFresh('wu', [].concat(w.data || [])); }
+    setSources((s) => ({ ...s, hw: h.ok ? 'ok' : 'error', wu: w.ok ? 'ok' : 'error' }));
   }, [markFresh]);
 
   // Full scan. The optimization pages don't depend on the driver scan, so they load right away,
@@ -1020,13 +1042,15 @@ export default function App() {
       h.ok ? api.gpuCheck(h.data.gpus, h.data.amdSoftware) : Promise.resolve({ ok: false }),
       board ? api.biosCheck(board) : Promise.resolve({ ok: false }),
     ]);
-    setWu(w.ok ? [].concat(w.data || []) : []);
-    if (w.ok) markFresh('wu', [].concat(w.data || []));
-    else setMsg({ kind: 'err', key: 'msg.wuFailed', vars: { e: w.error } });
-    setGpu(g.ok ? [].concat(g.data || []) : []);
-    if (g.ok) markFresh('gpu', [].concat(g.data || []));
-    setBios(b.ok ? b.data : { supported: false, page: null });
-    if (b.ok) markFresh('bios', b.data);
+    // A failed check keeps the last answer on screen (marked as not checked) instead of turning
+    // into "nothing to update".
+    if (w.ok) {
+      setWu([].concat(w.data || [])); markFresh('wu', [].concat(w.data || []));
+      setMsg((m) => (m?.key === 'msg.wuFailed' ? null : m)); // an earlier failure is resolved
+    } else setMsg({ kind: 'err', key: 'msg.wuFailed', vars: { e: w.error } });
+    if (g.ok) { setGpu([].concat(g.data || [])); markFresh('gpu', [].concat(g.data || [])); }
+    if (b.ok) { setBios(b.data); markFresh('bios', b.data); }
+    setSources(sourcesFrom({ hw: h, wu: w, gpu: g, bios: b }));
     step(3, 'scan.s3');
     await optimize;
     const at = Date.now();
@@ -1142,7 +1166,7 @@ export default function App() {
             {(STALE_KEYS[page] || []).some(stale) && <span className="stale-chip"><Loader2 size={12} className="spin" /> {t('stale.updating')}</span>}</div>
           <UpdateBanner status={appUpdate} />
           <Banner msg={shownMsg} onClose={() => setMsg(null)} />
-          {page === 'updates' && <UpdatesPage hw={hw} wu={wu} gpu={gpu} bios={bios} scan={scan} soundKey={settings?.sound !== false && fresh.wu && !scan.running ? scan.at : null} busy={lockWhile(scan.running)} onScan={fullScan} onInstall={installDrivers} onGpu={gpuInstall} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} onEnable={enable} prog={prog} />}
+          {page === 'updates' && <UpdatesPage hw={hw} wu={wu} gpu={gpu} bios={bios} sources={sources} scan={scan} soundKey={settings?.sound !== false && fresh.wu && !scan.running ? scan.at : null} busy={lockWhile(scan.running)} onScan={fullScan} onInstall={installDrivers} onGpu={gpuInstall} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} onEnable={enable} prog={prog} />}
           {page === 'hardware' && <HardwarePage hw={hw} onExport={exportHw} />}
           {page === 'overview' && <OverviewPage junk={junk} startup={startup} perf={perf} live={live} recs={recs && centerItems({ recs, bios, gpu, junk, startup, live, history })} go={setPage} />}
           {page === 'clean' && <CleanPage junk={junk} onRescan={() => { setJunk(null); loadJunk(); }} onClean={clean} busy={lockWhile(stale('junk'))} />}

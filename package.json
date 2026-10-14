@@ -6,6 +6,7 @@
   "main": "electron/main.cjs",
   "private": true,
   "scripts": {
+    "test": "node --test",
     "dev": "concurrently -k \"vite\" \"wait-on tcp:5175 && cross-env VITE_DEV=1 electron .\"",
     "build": "vite build",
     "start": "npm run build:service && electron .",

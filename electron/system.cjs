@@ -8,6 +8,7 @@ const net = require('net');
 const os = require('os');
 const path = require('path');
 const { oemBios, searchPage, BIOS_SOURCES } = require('./oem-bios.cjs');
+const { INTEL_1314_DESKTOP, microcodeAdvice } = require('./advice-rules.cjs');
 
 const PS =path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
 const PRELUDE = "$ErrorActionPreference='Stop'; $ProgressPreference='SilentlyContinue'; [Console]::OutputEncoding=[Text.Encoding]::UTF8;\n";
@@ -920,10 +921,7 @@ $result = @(
 
 // ---- judging the raw data ----
 
-// 13th–14th gen Intel desktop chips (65 W and up) and the voltage fix Intel ships in microcode:
-// 0x12B is the fix itself, later revisions refine it. Laptop chips (H/HX/U/P) are not affected.
-const INTEL_1314_DESKTOP = /i[579]-1[34]\d{3}(KS|KF|K|F|T)?(?![A-Z0-9])/i;
-const MICROCODE_FIX = 0x12B;
+// (The 13th–14th gen Intel microcode rule lives in advice-rules.cjs, with its source.)
 
 // Which memory channel a stick sits in, from the slot names the board reports: "Controller0-DIMM1"
 // (Intel: one controller per channel), "ChannelA-DIMM0", "P0 CHANNEL A" (AMD), "DIMM_B2", "A1".
@@ -983,8 +981,8 @@ function advise(list) {
       // most effective way to run cooler. A tip, judged on the page from the live readings.
       if (!x.laptop && ['intelHybrid', 'amd', 'amdX3D'].includes(p.cpuKind)) out.push({ key: 'powerLimit', group: 'cpu', cpuKind: p.cpuKind, intel1314: INTEL_1314_DESKTOP.test(x.cpu || ''), ok: null, guide: 'powerLimit' });
     } else if (x.key === 'microcode') {
-      if (x.laptop || !INTEL_1314_DESKTOP.test(x.cpu || '') || x.rev == null) continue;
-      out.push({ key: 'microcode', group: 'cpu', rev: x.rev, hex: `0x${Number(x.rev).toString(16).toUpperCase()}`, ok: x.rev >= MICROCODE_FIX, action: null });
+      const m = microcodeAdvice(x);
+      if (m) out.push(m);
     } else if (x.key === 'memory') {
       out.push(...memoryAdvice(x));
     } else if (x.key === 'trim') {
