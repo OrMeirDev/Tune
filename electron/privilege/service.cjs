@@ -8,7 +8,7 @@ const { JUNK, OPS_TABLE, STARTUP } = require('./operations.cjs');
 
 // Tune Service (service/TuneService.cs) runs the same operations as LocalSystem, so once it is
 // installed nothing asks for approval. Without it, Tune falls back to the 10-minute admin session.
-const SERVICE_VERSION = '5';
+const SERVICE_VERSION = '6';
 
 const PIPE = '\\\\.\\pipe\\TuneService';
 

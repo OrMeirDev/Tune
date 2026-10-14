@@ -45,7 +45,7 @@ namespace Tune
 
     public class TuneService : ServiceBase
     {
-        public const string Version = "5";
+        public const string Version = "6";
         // Another name only for testing a new build next to the installed service (--console --pipe X).
         static string PipeName = "TuneService";
         const int MaxRequest = 64 * 1024;

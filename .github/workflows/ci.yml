@@ -1,0 +1,29 @@
+# Every push and pull request: the unit, architecture, IPC and PowerShell tests, and the renderer
+# build, on Windows (several tests run Windows PowerShell). Releases are still built and published by
+# the owner; this only reports whether a change is safe to merge.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-fund --no-audit
+      - run: npm test
+      - run: npm run build
+      - name: main-process syntax
+        shell: pwsh
+        run: Get-ChildItem electron -Recurse -Filter *.cjs | ForEach-Object { node --check $_.FullName; if ($LASTEXITCODE) { exit 1 } }
