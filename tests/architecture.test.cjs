@@ -1,0 +1,75 @@
+// The renderer's dependency rules (see AGENTS.md), checked on every `npm test`:
+// - nothing imports App.jsx except the entry point;
+// - domain/ is pure: no React, no icons, no Electron, no UI modules;
+// - components/ and presentation/ don't reach into features/ or the app shell;
+// - a feature never imports another feature's page;
+// - the renderer never imports Node or Electron modules (only the preload bridge, via api.js);
+// - no import cycles.
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
+
+const SRC = path.join(__dirname, '..', 'src');
+const files = [];
+(function walk(d) {
+  for (const f of fs.readdirSync(d)) {
+    const p = path.join(d, f);
+    if (fs.statSync(p).isDirectory()) walk(p);
+    else if (/\.(jsx?|mjs)$/.test(f)) files.push(p);
+  }
+})(SRC);
+
+const rel = (p) => path.relative(SRC, p).split(path.sep).join('/');
+const importsOf = (file) => {
+  const code = fs.readFileSync(file, 'utf8');
+  return [...code.matchAll(/^\s*import\s+(?:[^'"]*?\s+from\s+)?['"]([^'"]+)['"]/gm)].map((m) => m[1]);
+};
+const resolve = (from, spec) => (spec.startsWith('.') ? rel(path.resolve(path.dirname(from), spec)) : spec);
+const graph = new Map(files.map((f) => [rel(f), importsOf(f).map((s) => resolve(f, s))]));
+
+test('only the entry point imports App.jsx', () => {
+  for (const [f, deps] of graph) if (deps.includes('App.jsx')) assert.equal(f, 'main.jsx', `${f} imports App.jsx`);
+});
+
+test('domain modules are pure', () => {
+  for (const [f, deps] of graph) {
+    if (!f.startsWith('domain/')) continue;
+    for (const d of deps) assert.ok(d.startsWith('domain/'), `${f} imports ${d}`);
+  }
+});
+
+test('shared components and presentation helpers stay out of features and the shell', () => {
+  for (const [f, deps] of graph) {
+    if (!/^(components|presentation)\//.test(f)) continue;
+    for (const d of deps) assert.ok(!/^(features|app)\//.test(d) && d !== 'App.jsx', `${f} imports ${d}`);
+  }
+});
+
+test("a feature doesn't import another feature's page", () => {
+  for (const [f, deps] of graph) {
+    const own = f.match(/^features\/([^/]+)\//)?.[1];
+    if (!own) continue;
+    for (const d of deps) {
+      const m = d.match(/^features\/([^/]+)\/[^/]*Page\.jsx$/);
+      assert.ok(!m || m[1] === own, `${f} imports ${d}`);
+    }
+  }
+});
+
+test('the renderer never imports Node or Electron modules', () => {
+  const banned = /^(electron|fs|path|os|net|child_process|crypto|node:)/;
+  for (const [f, deps] of graph) for (const d of deps) assert.ok(!banned.test(d), `${f} imports ${d}`);
+});
+
+test('no import cycles', () => {
+  const state = new Map();
+  const visit = (f, trail) => {
+    if (state.get(f) === 'done') return;
+    assert.notEqual(state.get(f), 'open', `cycle: ${[...trail, f].join(' -> ')}`);
+    state.set(f, 'open');
+    for (const d of graph.get(f) || []) if (graph.has(d)) visit(d, [...trail, f]);
+    state.set(f, 'done');
+  };
+  for (const f of graph.keys()) visit(f, []);
+});
