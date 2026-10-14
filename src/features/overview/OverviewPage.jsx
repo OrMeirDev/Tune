@@ -4,8 +4,9 @@ import { useT } from '../../i18n.js';
 import { fmtGB, ltr, tempClass } from '../../presentation/format.jsx';
 import { statusRank } from '../diagnostics/findingSelectors.js';
 import { recTitle } from '../diagnostics/recommendationText.js';
+import { PROBLEM_LIST } from '../diagnose/problems.js';
 
-export function OverviewPage({ junk, startup, perf, live, recs, go, sources = {} }) {
+export function OverviewPage({ junk, startup, perf, live, recs, go, onProblem, sources = {} }) {
   const t = useT();
   const junkTotal = (junk || []).reduce((s, c) => s + c.bytes, 0);
   const startOn = (startup || []).filter((s) => s.enabled).length;
@@ -13,6 +14,10 @@ export function OverviewPage({ junk, startup, perf, live, recs, go, sources = {}
   return (
     <>
       <header className="page-header"><div><h1>{t('ov.title')}</h1><p className="subtitle">{t('ov.subtitle')}</p></div></header>
+      <div className="problem-strip">
+        <span>{t('ov.problem')}</span>
+        {PROBLEM_LIST.map((p) => <button key={p.id} className="btn-ghost" onClick={() => onProblem(p.id)}><p.icon size={15} /> {t(`dx.p.${p.id}`)}</button>)}
+      </div>
       <div className="grid2">
         <div className="ocard">
           <div className="ohead"><span><Trash2 size={16} /> {t('ov.clean')}</span><b style={{ color: 'var(--accent)' }}>{junk && sources.junk !== 'error' ? fmtGB(junkTotal) : sources.junk === 'error' ? '—' : '…'}</b></div>

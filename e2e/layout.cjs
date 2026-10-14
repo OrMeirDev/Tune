@@ -77,8 +77,10 @@ app.whenReady().then(async () => {
       win.setContentSize(w, h); toSecondScreen(win); await wait(700);
       const navs = await js(`[...document.querySelectorAll('.nav-item')].map((b) => b.textContent)`);
       const idx = (re) => navs.findIndex((t) => re.test(t));
-      for (const [label, re] of [['center', /מרכז ביצועים|Performance center/], ['perf', /מעבד וזיכרון|CPU & memory/], ['overview', /סקירה|Overview/]]) {
+      for (const [label, re] of [['center', /מרכז ביצועים|Performance center/], ['perf', /מעבד וזיכרון|CPU & memory/], ['overview', /סקירה|Overview/], ['diagnose', /פתרון בעיה|Fix a problem/]]) {
         await nav(idx(re)); await wait(2600);
+        // the diagnosis page with a problem picked (reads Windows' start-up records; read only)
+        if (label === 'diagnose') { await js(`document.querySelector('.problem')?.click()`); await wait(12000); }
         const r = await js(CHECK);
         check(`${lang} ${w}x${h} ${label}: no overlap, no page/sidebar scroll, nothing sideways`, !r.pageScroll && !r.wide && !r.sideScroll && !r.overlaps.length, r.overlaps.length ? r.overlaps : undefined);
         await shot(`tune-${lang}-${w}-${label}.png`);

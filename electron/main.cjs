@@ -1,10 +1,12 @@
 const { app, BrowserWindow, ipcMain, shell, screen, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
 const sys = require('./system.cjs');
 const { pathToFileURL } = require('url');
 const { hardwareReport } = require('./report.cjs');
+const { createMeasureStore } = require('./measure-store.cjs');
 const { createChannels, CACHE_KEYS } = require('./ipc/channels.cjs');
 const { createOffers } = require('./ipc/offers.cjs');
 const { isTrustedSender, dispatch, pageOf } = require('./ipc/guard.cjs');
@@ -13,10 +15,18 @@ const { isTrustedSender, dispatch, pageOf } = require('./ipc/guard.cjs');
 
 const historyFile = () => path.join(app.getPath('userData'), 'history.json');
 const readHistory = () => { try { return JSON.parse(fs.readFileSync(historyFile(), 'utf8')); } catch { return []; } };
+// Each entry gets an ID, so measurements taken around a change can point at it (measure-store.cjs).
 function addHistory(action, detail) {
+  const id = crypto.randomUUID();
   fs.mkdirSync(app.getPath('userData'), { recursive: true });
-  fs.writeFileSync(historyFile(), JSON.stringify([{ action, detail, at: new Date().toISOString() }, ...readHistory()].slice(0, 500), null, 2));
+  fs.writeFileSync(historyFile(), JSON.stringify([{ id, action, detail, at: new Date().toISOString() }, ...readHistory()].slice(0, 500), null, 2));
+  return id;
 }
+
+// ---------- measurements (before and after a change; kept on this PC only) ----------
+
+let measureStore = null;
+const measurements = () => (measureStore ||= createMeasureStore({ file: path.join(app.getPath('userData'), 'measurements.json') }));
 
 // ---------- settings (the save folder is chosen only here) ----------
 
@@ -90,6 +100,18 @@ function exportHardware(hw, format) {
   return { ok: true, data: file };
 }
 
+function exportMeasurements() {
+  const stamp = new Date().toISOString().slice(0, 16).replace('T', '-').replace(':', '');
+  const file = path.join(getSettings().saveDir, `Tune-measurements-${stamp}.csv`);
+  try {
+    fs.writeFileSync(file, '\ufeff' + measurements().csv(), 'utf8'); // BOM: Excel reads it as UTF-8
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
+  shell.showItemInFolder(file);
+  return { ok: true, data: file };
+}
+
 // The background service ships in resources/service (service/bin while developing).
 const serviceDir = () => (app.isPackaged ? path.join(process.resourcesPath, 'service') : path.join(__dirname, '..', 'service', 'bin'));
 
@@ -100,7 +122,7 @@ const pageUrl = process.env.VITE_DEV ? 'http://localhost:5175/' : pathToFileURL(
 // What the main process found itself; actions point at these by ID.
 const offers = createOffers();
 const channels = createChannels({
-  sys, offers, shell, progressTo, warmOr, serviceDir, exportHardware,
+  sys, offers, shell, progressTo, warmOr, serviceDir, exportHardware, exportMeasurements,
   appVersion: () => app.getVersion(),
   updater: {
     check: () => (app.isPackaged ? autoUpdater.checkForUpdates().then(() => true).catch(() => false) : false),
@@ -109,6 +131,11 @@ const channels = createChannels({
   },
   cache: { read: readCache, write: writeCache },
   history: { add: addHistory, read: readHistory },
+  measurements: {
+    add: (records) => measurements().add(records),
+    addDiskPair: (before, after, id) => measurements().addDiskPair(before, after, id),
+    view: (actions) => measurements().view(actions),
+  },
   settings: {
     get: getSettings,
     save: saveSettings,

@@ -36,12 +36,22 @@ function world() {
     junkClean: rec('junkClean', ok({ freed: 1, skipped: 0 })),
     startupToggle: rec('startupToggle'),
     applyRecommendation: rec('applyRecommendation'),
+    diskFree: rec('diskFree', { drive: 'C:', freeBytes: 40e9 }),
+    restMeasure: rec('restMeasure', ok([{ metric: 'restCpuLoad', value: 4 }])),
+    bootInfo: rec('bootInfo', ok({ fastStartup: true, systemMedia: 'ssd', lastBootType: 'full', timings: 'ok', records: [{ metric: 'bootToDesktopMs', value: 20000 }] })),
   };
+  const measured = [];
   const history = [];
   const opened = [];
   const d = {
     sys, offers: createOffers(), warmOr: (_k, fn) => fn(), progressTo: () => () => {},
-    history: { add: (a, x) => history.push([a, x]), read: () => history },
+    history: { add: (a, x) => { history.push([a, x]); return `id-${history.length}`; }, read: () => history },
+    measurements: {
+      add: (r) => measured.push(...[].concat(r)),
+      addDiskPair: (b, a, id) => { measured.push(['pair', b, a, id]); return { state: 'better', delta: 1 }; },
+      view: (actions) => ({ records: measured, latest: {}, changes: actions }),
+    },
+    exportMeasurements: () => ok('C:\\dl\\Tune-measurements.csv'),
     settings: { get: () => ({ saveDir: 'C:\\dl' }), save: () => {}, pickDir: () => {} },
     shell: { openPath: (p) => opened.push(p), showItemInFolder: (p) => opened.push(p), openExternal: (u) => opened.push(u) },
     cache: { read: () => ({}), write: () => {} },
@@ -53,7 +63,7 @@ function world() {
   const trusted = (e) => isTrustedSender(e, { webContents, pageUrl: PAGE });
   const call = (name, ...args) => dispatch(channels[name], ev, args, trusted);
   const scanned = async () => { for (const c of ['hw:scan', 'drv:updates', 'drv:gpu', 'bios:check', 'junk:scan', 'startup:list', 'rec:list']) await call(c); calls.length = 0; };
-  return { calls, history, opened, channels, call, scanned, trusted };
+  return { calls, history, opened, channels, call, scanned, trusted, measured, sys };
 }
 
 test('shape rules', () => {
@@ -100,6 +110,8 @@ test('malformed requests run nothing', async () => {
     ['cache:set', ['secrets', 1]], ['cache:set', ['hw', 'x'.repeat(5_000_001)]],
     ['link:open', ['http://example.com']], ['link:open', ['javascript:alert(1)']], ['link:open', ['https://user:pw@evil.example/']],
     ['bios:download', [{ url: 'https://evil.example/b.zip' }]], ['drv:gpuInstaller', [42]],
+    ['measure:take', ['benchmark']], ['measure:take', [{ metric: 'restCpuTempC', value: 20 }]], ['measure:take', []],
+    ['measure:list', ['x']], ['measure:export', ['C:\\Windows\\evil.csv']],
   ];
   for (const [name, args] of bad) assert.deepEqual(await w.call(name, ...args), INVALID, `${name} ${JSON.stringify(args).slice(0, 60)}`);
   assert.equal(w.calls.length, 0);
@@ -158,4 +170,37 @@ test('every bridge call has a guarded channel, and main registers channels only 
   assert.match(main, /sandbox: true/);
   assert.match(main, /setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\)/);
   assert.match(main, /will-navigate/);
+});
+
+test('measurements are taken by the main process; the window only names the kind', async () => {
+  const w = world();
+  const r = await w.call('measure:take', 'rest');
+  assert.equal(r.ok, true);
+  assert.deepEqual(w.measured, [{ metric: 'restCpuLoad', value: 4 }], 'what the main process measured is stored');
+  const b = await w.call('measure:take', 'boot');
+  assert.deepEqual(b.data, { fastStartup: true, systemMedia: 'ssd', lastBootType: 'full', timings: 'ok' }, 'the facts go back, the records go to the store');
+  assert.equal(w.measured.length, 2);
+  assert.equal((await w.call('measure:list')).data.records.length, 2);
+  assert.equal((await w.call('measure:export')).data, 'C:\\dl\\Tune-measurements.csv');
+});
+
+test('one measurement at a time', async () => {
+  const w = world();
+  let release;
+  w.sys.restMeasure = () => new Promise((r) => { release = () => r(ok([])); });
+  const first = w.call('measure:take', 'rest');
+  assert.deepEqual(await w.call('measure:take', 'boot'), { ok: false, error: 'busy' }, 'refused while the first runs');
+  release();
+  assert.equal((await first).ok, true);
+  assert.equal((await w.call('measure:take', 'boot')).ok, true, 'accepted again once it finished');
+});
+
+test('a cleanup measures the drive right before and after, linked to its history entry', async () => {
+  const w = world();
+  await w.scanned();
+  const r = await w.call('junk:clean', ['userTemp']);
+  assert.deepEqual(w.calls.map((c) => c[0]), ['diskFree', 'junkClean', 'diskFree'], 'before, the cleanup, after');
+  assert.deepEqual(r.data.onDisk, { state: 'better', delta: 1 });
+  const pair = w.measured.find((m) => m[0] === 'pair');
+  assert.equal(pair[3], `id-${w.history.length}`, 'the pair points at the history entry of this cleanup');
 });

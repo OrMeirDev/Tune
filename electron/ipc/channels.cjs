@@ -18,6 +18,7 @@ function createChannels(d) {
   const { sys, offers } = d;
   // Folders shown on the cleanup page open in Explorer; only folders the last scan reported.
   let junkDirs = new Set();
+  let measuring = false;
   const remember = (kind) => async (r) => offers.remember(kind, await r);
 
   return {
@@ -81,8 +82,15 @@ function createChannels(d) {
     'junk:clean': {
       args: [arrayOf(str(40), 30)],
       run: (keys) => withOffer(offers.junkCategories(keys), async (cats) => {
+        // Free space on the system drive right before and after, so the result shows what the drive
+        // actually gained, next to the size of the files deleted (plan PF02).
+        const before = await sys.diskFree();
         const r = await sys.junkClean(cats.map((c) => c.key));
-        if (r.ok) d.history.add('clean', { cats: cats.map((c) => c.key), freed: r.data.freed });
+        if (r.ok) {
+          const after = await sys.diskFree();
+          const id = d.history.add('clean', { cats: cats.map((c) => c.key), freed: r.data.freed });
+          return { ...r, data: { ...r.data, onDisk: d.measurements.addDiskPair(before, after, id) } };
+        }
         return r;
       }),
     },
@@ -95,6 +103,33 @@ function createChannels(d) {
         return r;
       }),
     },
+
+    // Measurements (read only): the PC at rest, or Windows' start-up records. One at a time, so two
+    // rest measurements never see each other's load. The window says which kind; the values are
+    // taken here, never sent in.
+    'measure:take': {
+      args: [oneOf(['rest', 'boot'])],
+      run: async (what) => {
+        if (measuring) return { ok: false, error: 'busy' };
+        measuring = true;
+        try {
+          if (what === 'rest') {
+            const r = await sys.restMeasure({ onProgress: d.progressTo('measure') });
+            if (r.ok) d.measurements.add(r.data);
+            return r;
+          }
+          const r = await sys.bootInfo();
+          if (!r.ok) return r;
+          const { records, ...facts } = r.data;
+          d.measurements.add(records);
+          return { ok: true, data: facts };
+        } finally {
+          measuring = false;
+        }
+      },
+    },
+    'measure:list': { args: [], run: () => ({ ok: true, data: d.measurements.view(d.history.read()) }) },
+    'measure:export': { args: [], run: () => d.exportMeasurements() },
 
     'perf:get': { args: [], run: () => sys.performance() },
     'perf:sensors': { args: [], run: () => sys.sensors() },

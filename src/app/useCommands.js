@@ -5,7 +5,16 @@ import { api } from '../api.js';
 import { recTitle } from '../features/diagnostics/recommendationText.js';
 import { errText, fmtGB } from '../presentation/format.jsx';
 
-export function useCommands({ t, act, results, loadService, setGuide, setAdminUntil, setSettings }) {
+// What a cleanup did to the drive's free space, measured right before and after (plan PF02).
+function onDiskText(m, t) {
+  const drive = m?.after?.conditions?.drive || m?.before?.conditions?.drive || 'C:';
+  if (m?.state === 'better') return t('msg.onDisk', { size: fmtGB(m.delta), drive });
+  if (m?.state === 'same') return t('msg.onDiskSame', { drive });
+  if (m?.state === 'worse') return t('msg.onDiskWorse', { size: fmtGB(-m.delta), drive });
+  return '';
+}
+
+export function useCommands({ t, act, results, loadService, setGuide, setAdminUntil, setSettings, onMeasured }) {
   const { bios, scanDrivers, loadJunk, loadStartup, loadRecs, loadPerf } = results;
 
   const installDrivers = (items) => {
@@ -22,7 +31,8 @@ export function useCommands({ t, act, results, loadService, setGuide, setAdminUn
   const enable = (p) => act(p.id, () => api.enableDevice(p.id), () => { scanDrivers(); return t('msg.enabled', { name: p.name }); }, { admin: true });
   const clean = (cats) => act('clean', () => api.junkClean(cats.map((c) => c.key)), (d) => {
     loadJunk();
-    return t('msg.cleaned', { size: fmtGB(d.freed) }) + (d.skipped ? t('msg.skipped', { n: d.skipped }) : '') + (d.adminError ? t('msg.adminPartFailed', { e: errText(d.adminError, t) }) : '') + (d.busy?.length ? t('msg.wuBusy') : '');
+    onMeasured();
+    return t('msg.cleaned', { size: fmtGB(d.freed) }) + onDiskText(d.onDisk, t) + (d.skipped ? t('msg.skipped', { n: d.skipped }) : '') + (d.adminError ? t('msg.adminPartFailed', { e: errText(d.adminError, t) }) : '') + (d.busy?.length ? t('msg.wuBusy') : '');
   }, { admin: cats.some((c) => c.admin) });
   const toggle = (s, en) => act(s.source + s.key, () => api.startupToggle(s.source, s.key, en), () => { loadStartup(); return t(en ? 'msg.startupOn' : 'msg.startupOff', { name: s.name }); }, { admin: s.admin });
   const apply = (r) => act(r.key, () => api.applyRecommendation(r.key), (d) => { loadRecs(); return t(d === 'reboot' ? 'msg.recReboot' : 'msg.recDone', { title: recTitle(r, t) }); }, { admin: r.key === 'hags' });
@@ -39,6 +49,13 @@ export function useCommands({ t, act, results, loadService, setGuide, setAdminUn
   const removeService = () => window.confirm(t('msg.svcRemoveConfirm'))
     && act('service', () => api.uninstallService(), () => { loadService(); return t('msg.svcRemoved'); }, { admin: true });
   const setLang = async (lang) => setSettings(await api.setLanguage(lang));
+  // 20 seconds of readings at rest; a busy PC is measured but never compared with rest measurements
+  const measureRest = () => act('measure', () => api.measureTake('rest'), (recs) => {
+    onMeasured();
+    const load = [].concat(recs || []).find((r) => r.metric === 'restCpuLoad');
+    return t(load?.conditions?.loadBand === 'busy' ? 'msg.measuredBusy' : 'msg.measured');
+  });
+  const exportMeasurements = () => act('exportMeasurements', () => api.measureExport(), (file) => t('msg.saved', { file }));
 
-  return { installDrivers, gpuInstall, biosDownload, enable, clean, toggle, apply, restorePoint, exportHw, adminStart, adminStop, installService, removeService, setLang };
+  return { installDrivers, gpuInstall, biosDownload, enable, clean, toggle, apply, restorePoint, exportHw, adminStart, adminStop, installService, removeService, setLang, measureRest, exportMeasurements };
 }
