@@ -20,7 +20,7 @@ decisions (see the end).
 | P07 | Upgrade advice (PF08) | Not started; needs P01, P05 |
 | L00 | Licence policy and choice of service | Open decisions (below) |
 | L01 | Server and one-time redemption | **Proof of concept completed**: `licensing/` (not shipped in the installer); run `node --test "licensing/**/*.test.cjs"` |
-| L02 | Activation and recovery inside Tune | **Implemented, Windows validation pending**: main-process client, Settings flow in English and Hebrew, entitlement mechanism (shipped policy: open). Verified off Windows with a DPAPI stand-in; the Windows steps below are not done yet |
+| L02 | Activation and recovery inside Tune | **Implemented and repaired after review (R01–R05), Windows validation pending**: main-process client, renewal while Tune runs, confirmed release, Settings flow in English and Hebrew, entitlement mechanism (shipped policy: open). Verified off Windows with a DPAPI stand-in; the Windows steps below are not done yet |
 | L03 | Admin and manual sale | Not started (the PoC has the admin issuing call only) |
 | L04 | Automatic payment | Not started; needs a payment provider |
 | L05 | Self-service recovery | Not started (L02 recovers on the same PC; moving to another PC needs a release, which only the server API offers) |
@@ -101,8 +101,25 @@ What is implemented and tested off Windows:
   and certificates never reach the window; eight `license:*` channels take what the person typed or
   chose (checked shapes) and return summaries.
 - **Requests**: bounded time (connect, wait, read), bounded size, no redirects. No usable answer is
-  "unavailable": nothing is decided, and Try again resends the same request (same Serial, owner,
-  device key and idempotency key), so an activation the server carried out returns its licence.
+  "unavailable": the server may or may not have carried the request out, so the window says the result
+  *isn't confirmed* (never "nothing changed"), and Try again resends the same request (same Serial,
+  owner, device key and idempotency key), so an activation the server carried out returns its licence
+  and no second one is made.
+- **Renewal while Tune runs**: the certificate (7 days) is renewed in the background 12 hours after the
+  last check or 2 days before it ends, whichever is first; after a try with no answer, again after 1,
+  2, 4 ... minutes, at most an hour apart. A look happens at least every 15 minutes and at once on
+  resume or unlock, always against the current clock (a clock set back stops renewal and is reported).
+  One request at a time: "Check now" during a background renewal takes its answer; any other action
+  starts after it. Timers never keep Tune running and stop when it quits. Nothing renews without a
+  server, without a licence, or after a release or revocation the server confirmed; a certificate that
+  expired during an outage is renewed once the server answers. The Settings row updates by itself.
+- **Release**: when the server confirms this PC's seat was released (the owner moved the licence), the
+  release is stored (protected), survives a restart, shows as *released* in English and Hebrew, and
+  under an enforcing policy refuses new gated actions (open policy, running actions, data, exports and
+  recovery are unaffected). Only this PC's binding changes; the licence and other PCs don't. It becomes
+  active again only through a recovery the server approves, with a certificate that verifies. A PC
+  that never got the answer (offline) follows its signed certificate. "Check now" shows its result in
+  the row.
 - **Storage**: one file encrypted with DPAPI (Electron `safeStorage`); no plaintext fallback (without
   protection nothing is activated); an unreadable file is kept, never deleted; a failed write leaves
   the licence valid for the session and Tune usable.
@@ -117,15 +134,30 @@ What is implemented and tested off Windows:
   exports, history, restore points and settings are never gated, and a running action is never
   interrupted. The `enforce` policy exists for later and for tests; the paid feature list is open.
 - **Tests**: `tests/licensing-client.test.cjs` (19, the client against the PoC over real HTTP),
-  IPC bypass attempts in `tests/ipc.test.cjs`, wording in `tests/licensing-text.test.cjs`,
-  architecture rules; `npm run e2e:licensing` (20 checks, the real app against the PoC, keyboard,
-  Hebrew RTL, an outage and retry).
+  `tests/licensing-repairs.test.cjs` (14, the review's regressions on a hand-moved clock and timers),
+  `tests/e2e-harness.test.cjs` (7, the e2e runner as real processes), IPC bypass attempts in
+  `tests/ipc.test.cjs`, wording in `tests/licensing-text.test.cjs`, architecture rules;
+  `npm run e2e:licensing` (25 checks, the real app against the PoC, keyboard, Hebrew RTL, an outage
+  and retry, a confirmed release and its recovery).
+
+#### Review repairs (2026-10-14)
+
+The review of `38a2a98` found five gaps. Each has a permanent regression that was run against `38a2a98`
+(fails) and after the repair (passes), on Linux:
+
+| ID | Gap | Repair | Evidence |
+| --- | --- | --- | --- |
+| R01 | Renewal ran only at start; a Tune left open let its certificate expire | Background renewal (above): due times, bounded backoff, 15-minute looks, `resume`/`unlock-screen`, one request at a time, unref'd timers disposed at quit, `license:changed` to the window | `licensing-repairs` R01 (8): 7 of 8 fail on `38a2a98`; the 8th (a resume and an unlock during a renewal) was added after a self-review and failed on the first repair (2 requests) before its fix; all pass now |
+| R02 | A release the server confirmed (`device_released`) was dropped; the PC kept showing active | Stored as `serverStatus: released` (protected), evaluated as `released`, shown in the row (en/he), gated under `enforce`; a server-approved recovery clears it | `licensing-repairs` R02 (4): 3 fail on `38a2a98`, the offline guard passes by design; `e2e:licensing` step 5 (release on the server → "Check now" shows it, a gated request is refused, recovery → active) |
+| R03 | A lost answer was worded "Nothing changed" | "Isn't confirmed" per action in English and Hebrew; `api.cjs` comments corrected; retry unchanged | `licensing-repairs` R03 (2): both fail on `38a2a98`; the redemption is committed, its answer lost, the wording checked, and the retry gives exactly one licence |
+| R04 | `e2e:licensing` printed `ALL PASSED` and exited 0 after an unexpected error | `e2e/harness.cjs`: passes only when every step ran with no failure; cleanup always runs and its error never hides the first | `e2e-harness` (7, real processes): 6 fail on `38a2a98` (no runner); the real app with a broken `node` on PATH: before, `ALL PASSED`/exit 0 both with an error before the first check and after five passing ones; after, `1 FAILED (stopped before the end)`/exit 1 |
+| R05 | The Settings background-service note was wider than the card (sideways scroll) | The row's text column may shrink (`min-width: 0`) and its notes wrap in the Settings card; no clipping, no smaller type | `e2e:layout` checks the card itself (scroll width, clipped or outside text): 4 fail on `38a2a98` (card 1356–1666 px wide for 674–1005 px visible), all 24 pass now |
 
 Pending on Windows 10 and 11 (not done; this environment has no Windows):
 
 1. `npm run e2e:licensing` on each, unpackaged (real DPAPI and the PC's own machine id): all checks
    pass; `license.bin` in the profile holds no readable key or certificate (search it for
-   `PRIVATE KEY` and `tune-license`).
+   `PRIVATE KEY` and `tune-license`); a confirmed release survives closing and reopening Tune.
 2. DPAPI boundaries: copy `license.bin` to another Windows user's profile and start Tune there: the
    licence shows as unreadable and is kept; recovery works for the owner. Turn the PC's network off:
    the licence stays active until its certificate's end, and "Check now" says it couldn't connect.
@@ -133,6 +165,12 @@ Pending on Windows 10 and 11 (not done; this environment has no Windows):
    reinstall; recovery after deleting the profile returns the same licence.
 4. A packaged build (`npm run dist` on a disposable VM): Settings says licensing is not open, and
    setting `TUNE_LICENSING_URL` changes nothing.
+5. Renewal on a real PC (against a local PoC server, unpackaged): put the PC to sleep and wake it, and
+   lock and unlock it: Electron's `resume` and `unlock-screen` reach the client and one renewal is sent
+   when due; change the Windows clock forward and back: forward is seen within 15 minutes, back stops
+   renewal and is reported; Tune quits promptly with renewal timers pending.
+6. `npm run e2e:layout` on Windows at 980×640 and 1347×852 (English and Hebrew), including the Settings
+   card, with the real fonts and the real service status text.
 
 ### Known limits of step one
 
@@ -155,9 +193,9 @@ Pending on Windows 10 and 11 (not done; this environment has no Windows):
      read, that a standard user who is refused gets "not checked" (not "OK"), that two starts close
      together each get their own kind (a restart right after a Fast Startup start), and that a startup
      change followed by another Windows change before the next start shows "not comparable";
-   - `npm run e2e:layout` (it includes the Fix a problem page), knowing it checks layout only, not
-     that start-up collection works (it passed on Linux on 2026-10-14, 20 checks, with every Windows
-     scan failing there; the Windows run is still to do);
+   - `npm run e2e:layout` (it includes the Fix a problem page and the Settings card), knowing it checks
+     layout only, not that start-up collection works (it passed on Linux on 2026-10-14, 24 checks, with
+     every Windows scan failing there; the Windows run is still to do);
    - the L02 steps above; then decide whether start-up timing should go through the service (needs a
      service version bump).
 2. **P02 / PF03**: per-entry startup impact (measured vs estimated), delayed start for supported entry
@@ -180,5 +218,3 @@ Pending on Windows 10 and 11 (not done; this environment has no Windows):
 | Purchase and support | payment provider, ownership binding, delivery, refunds, recovery path |
 | Licensing service | a service such as Keygen behind a small adapter vs an own server (cost, data export, one-time redemption support) |
 
-Known, not from this work: on the Settings page the background-service note is wider than the card
-at 1347 px (a horizontal scrollbar in the card); it is the same in 1.3.1.
