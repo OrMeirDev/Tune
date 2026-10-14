@@ -124,3 +124,34 @@ test('the request layer (ipc/) gets the Windows operations injected, never requi
     for (const d of deps) assert.ok(!/^(features|privilege|infra)\//.test(d) && d !== 'system.cjs', `${f} requires ${d}`);
   }
 });
+
+// ---- licensing: what ships and what doesn't ----
+// - electron/licensing/ is the packaged client: it may use infra/ (the read-only identity query) and
+//   itself, never features/, privilege/ (a licence is never an admin right), ipc/ or the facade;
+// - nothing in the app requires the licensing server PoC (licensing/, outside electron/);
+// - the installer packs electron/**, dist/** and package.json only, never licensing/;
+// - no server secret or server-only piece (database, signing key, admin token, outbox) is named in
+//   the shipped client.
+test('the licensing client stays out of privileges and features', () => {
+  for (const [f, deps] of elGraph) {
+    if (!f.startsWith('licensing/')) continue;
+    for (const d of deps) assert.ok(!/^(features|privilege|ipc)\//.test(d) && d !== 'system.cjs', `${f} requires ${d}`);
+  }
+});
+
+test('the app never requires the licensing server, and the installer never packs it', () => {
+  for (const [f, deps] of elGraph) for (const d of deps) assert.ok(!d.startsWith('../'), `${f} requires ${d} (outside electron/)`);
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  assert.deepEqual(pkg.build.files, ['dist/**', 'electron/**', 'package.json']);
+  assert.ok(!JSON.stringify(pkg.build.extraResources).includes('licensing'));
+});
+
+test('the shipped licensing client names no server secret', () => {
+  const dir = path.join(EL, 'licensing');
+  for (const f of fs.readdirSync(dir)) {
+    const code = fs.readFileSync(path.join(dir, f), 'utf8');
+    for (const word of ['node:sqlite', 'adminToken', 'signingKey', 'codeSecret', 'deliveryKey', 'outbox']) {
+      assert.ok(!code.includes(word), `${f} mentions ${word}`);
+    }
+  }
+});

@@ -30,6 +30,7 @@ test('every generated PowerShell script parses', { skip: process.platform !== 'w
   await f('recommendations.cjs').applyRecommendation('gamemode');
   await f('sensors.cjs').performance();
   await f('measurements.cjs').bootInfo();
+  await require(path.join(EL, 'licensing', 'identity.cjs')).readMachineId(ps.runPS);
   const ops = require(path.join(EL, 'privilege', 'operations.cjs'));
   scripts.set('ops table (admin operations)', `${ops.STARTUP}${ops.JUNK}${ops.OPS_TABLE()}`);
   scripts.set('service ops.ps1', service.serviceOpsScript());

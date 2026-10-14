@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, screen, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, screen, dialog, safeStorage, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -7,6 +7,7 @@ const sys = require('./system.cjs');
 const { pathToFileURL } = require('url');
 const { hardwareReport } = require('./report.cjs');
 const { createMeasureStore } = require('./measure-store.cjs');
+const { createLicensing } = require('./licensing/index.cjs');
 const { createChannels, CACHE_KEYS } = require('./ipc/channels.cjs');
 const { createOffers } = require('./ipc/offers.cjs');
 const { isTrustedSender, dispatch, pageOf } = require('./ipc/guard.cjs');
@@ -112,6 +113,17 @@ function exportMeasurements() {
   return { ok: true, data: file };
 }
 
+// ---------- licensing (licensing/: shipped defaults change nothing; see licensing/config.cjs) ----------
+
+// Created on first use, after the app is ready (safeStorage and net need it).
+let licensingParts = null;
+const licensing = () => (licensingParts ||= createLicensing({
+  packaged: app.isPackaged,
+  userData: app.getPath('userData'),
+  safeStorage,
+  fetch: typeof net.fetch === 'function' ? (url, init) => net.fetch(url, init) : globalThis.fetch,
+}));
+
 // The background service ships in resources/service (service/bin while developing).
 const serviceDir = () => (app.isPackaged ? path.join(process.resourcesPath, 'service') : path.join(__dirname, '..', 'service', 'bin'));
 
@@ -131,6 +143,20 @@ const channels = createChannels({
   },
   cache: { read: readCache, write: writeCache },
   history: { add: addHistory, read: readHistory },
+  licensing: {
+    status: () => licensing().client.status(),
+    startOwner: (email) => licensing().client.startOwner(email),
+    confirmOwner: (code) => licensing().client.confirmOwner(code),
+    activate: (serial) => licensing().client.activate(serial),
+    recover: (licenseId) => licensing().client.recover(licenseId),
+    retry: () => licensing().client.retry(),
+    refresh: () => licensing().client.refresh(),
+    reset: () => licensing().client.reset(),
+  },
+  entitlements: {
+    featureOf: (channel) => licensing().entitlements.featureOf(channel),
+    check: (feature) => licensing().entitlements.check(feature),
+  },
   measurements: {
     add: (records) => measurements().add(records),
     addDiskPair: (before, after, id) => measurements().addDiskPair(before, after, id),
@@ -203,7 +229,8 @@ if (serviceArg) {
   app.exit(0);
 } else {
   app.on('second-instance', focusMain);
-  app.whenReady().then(() => { prewarm(); createWindow(); });
+  // licensing reads what is stored and renews in the background when due; it never delays the window
+  app.whenReady().then(() => { prewarm(); createWindow(); licensing().client.init(); });
 }
 app.on('window-all-closed', () => app.quit());
 // Closing Tune also ends an open admin session instead of leaving it for the rest of its 10 minutes.
