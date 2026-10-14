@@ -30,10 +30,13 @@ export function useScanResults({ setMsg }) {
   }, []);
   const stale = (key) => !!fromCache[key] && !fresh[key];
 
-  const loadJunk = useCallback(async () => { const r = await api.junkScan(); const v = r.ok ? [].concat(r.data) : []; setJunk(v); if (r.ok) markFresh('junk', v); }, [markFresh]);
-  const loadStartup = useCallback(async () => { const r = await api.startupList(); const v = r.ok ? [].concat(r.data || []) : []; setStartup(v); if (r.ok) markFresh('startup', v); }, [markFresh]);
+  // A failed scan keeps the last answer (or none) and is recorded as not checked; it never becomes an
+  // empty list, which would read as "nothing to clean" / "no startup apps".
+  const checked = useCallback((key, ok) => setSources((s) => ({ ...s, [key]: ok ? 'ok' : 'error' })), []);
+  const loadJunk = useCallback(async () => { const r = await api.junkScan(); if (r.ok) { const v = [].concat(r.data || []); setJunk(v); markFresh('junk', v); } checked('junk', r.ok); }, [markFresh, checked]);
+  const loadStartup = useCallback(async () => { const r = await api.startupList(); if (r.ok) { const v = [].concat(r.data || []); setStartup(v); markFresh('startup', v); } checked('startup', r.ok); }, [markFresh, checked]);
   const loadPerf = useCallback(async () => { const r = await api.performance(); if (r.ok) setPerf(r.data); }, []);
-  const loadRecs = useCallback(async () => { const r = await api.recommendations(); const v = r.ok ? [].concat(r.data) : []; setRecs(v); if (r.ok) markFresh('recs', v); }, [markFresh]);
+  const loadRecs = useCallback(async () => { const r = await api.recommendations(); if (r.ok) { const v = [].concat(r.data || []); setRecs(v); markFresh('recs', v); } checked('recs', r.ok); }, [markFresh, checked]);
 
   // Drivers only: after an install, to refresh what is still offered.
   const scanDrivers = useCallback(async () => {
@@ -69,7 +72,7 @@ export function useScanResults({ setMsg }) {
     } else setMsg({ kind: 'err', key: 'msg.wuFailed', vars: { e: w.error } });
     if (g.ok) { setGpu([].concat(g.data || [])); markFresh('gpu', [].concat(g.data || [])); }
     if (b.ok) { setBios(b.data); markFresh('bios', b.data); }
-    setSources(sourcesFrom({ hw: h, wu: w, gpu: g, bios: b }));
+    setSources((s) => ({ ...s, ...sourcesFrom({ hw: h, wu: w, gpu: g, bios: b }) }));
     step(3, 'scan.s3');
     await optimize;
     const at = Date.now();

@@ -5,7 +5,7 @@ import { fmtGB, ltr, tempClass } from '../../presentation/format.jsx';
 import { statusRank } from '../diagnostics/findingSelectors.js';
 import { recTitle } from '../diagnostics/recommendationText.js';
 
-export function OverviewPage({ junk, startup, perf, live, recs, go }) {
+export function OverviewPage({ junk, startup, perf, live, recs, go, sources = {} }) {
   const t = useT();
   const junkTotal = (junk || []).reduce((s, c) => s + c.bytes, 0);
   const startOn = (startup || []).filter((s) => s.enabled).length;
@@ -15,12 +15,12 @@ export function OverviewPage({ junk, startup, perf, live, recs, go }) {
       <header className="page-header"><div><h1>{t('ov.title')}</h1><p className="subtitle">{t('ov.subtitle')}</p></div></header>
       <div className="grid2">
         <div className="ocard">
-          <div className="ohead"><span><Trash2 size={16} /> {t('ov.clean')}</span><b style={{ color: 'var(--accent)' }}>{junk ? fmtGB(junkTotal) : '…'}</b></div>
+          <div className="ohead"><span><Trash2 size={16} /> {t('ov.clean')}</span><b style={{ color: 'var(--accent)' }}>{junk && sources.junk !== 'error' ? fmtGB(junkTotal) : sources.junk === 'error' ? '—' : '…'}</b></div>
           {(junk || []).filter((c) => c.bytes > 1e6).slice(0, 4).map((c) => <div key={c.key} className="orow"><span>{t(`junk.${c.key}`)}</span><span>{fmtGB(c.bytes)}</span></div>)}
           <div className="ofoot"><span /><button className="btn-primary" onClick={() => go('clean')}>{t('ov.toClean')}</button></div>
         </div>
         <div className="ocard">
-          <div className="ohead"><span><Rocket size={16} /> {t('ov.startup')}</span><span className="muted">{startup ? t('ov.activeOf', { n: startOn, total: startup.length }) : '…'}</span></div>
+          <div className="ohead"><span><Rocket size={16} /> {t('ov.startup')}</span><span className="muted">{startup && sources.startup !== 'error' ? t('ov.activeOf', { n: startOn, total: startup.length }) : sources.startup === 'error' ? '—' : '…'}</span></div>
           {(startup || []).filter((s) => s.enabled).slice(0, 4).map((s) => <div key={s.source + s.key} className="orow"><span>{s.name}</span><span className="ok-text">{t('ov.active')}</span></div>)}
           <div className="ofoot"><span /><button className="btn-ghost" onClick={() => go('startup')}>{t('ov.allList')}</button></div>
         </div>

@@ -19,6 +19,10 @@ fs.mkdirSync(OUT_DIR, { recursive: true });
 const tune = APP_DIR;
 app.setPath('userData', fs.mkdtempSync(path.join(require('os').tmpdir(), 'tune-smoke-')));
 app.on('window-all-closed', () => {});
+const failures = [];
+const check = (name, cond, got) => { console.log(`${cond ? 'PASS' : 'FAIL'} ${name}${got !== undefined ? ` (${JSON.stringify(got)})` : ''}`); if (!cond) failures.push(name); };
+const finish = () => { console.log(failures.length ? `${failures.length} FAILED` : 'ALL PASSED'); app.exit(failures.length ? 1 : 0); };
+
 app.whenReady().then(async () => {
   require(path.join(tune, 'electron', 'main.cjs'));
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -37,17 +41,19 @@ app.whenReady().then(async () => {
   for (let i = 0; i < n; i++) {
     await js(`document.querySelectorAll('.nav-item')[${i}].click()`); await wait(1800);
     const r = await js(`({ h1: document.querySelector('.main h1')?.textContent || '(no heading)', len: document.querySelector('.main')?.innerText.length || 0 })`);
-    console.log(`page ${i}: ${r.h1} · ${r.len} chars`);
+    check(`page ${i} renders (${r.h1})`, r.h1 !== '(no heading)' && r.len > 50, r.len);
   }
   // the dialogs: power-limit guide from the performance center
   await js(`[...document.querySelectorAll('.nav-item')].find((b) => /מרכז ביצועים|Performance center/.test(b.textContent))?.click()`); await wait(1500);
   await js(`[...document.querySelectorAll('button')].find((b) => /איך עושים|How to/.test(b.textContent))?.click()`); await wait(600);
-  console.log('guide dialog:', await js(`document.querySelector('.modal h2, .modal .modal-title, .modal b')?.textContent || 'none'`));
-  console.log('dialog a11y:', JSON.stringify(await js(`({ role: document.querySelector('.modal')?.getAttribute('role'), labelled: !!document.getElementById(document.querySelector('.modal')?.getAttribute('aria-labelledby') || 'x'), focusInside: !!document.querySelector('.modal')?.contains(document.activeElement) })`)));
+  check('the power-limit guide opens', (await js(`document.querySelector('.modal h2')?.textContent || ''`)).length > 0);
+  const a11y = await js(`({ role: document.querySelector('.modal')?.getAttribute('role'), labelled: !!document.getElementById(document.querySelector('.modal')?.getAttribute('aria-labelledby') || 'x'), focusInside: !!document.querySelector('.modal')?.contains(document.activeElement) })`);
+  check('the dialog is a labelled dialog with focus inside', a11y.role === 'dialog' && a11y.labelled && a11y.focusInside, a11y);
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' }); await wait(400);
-  console.log('Escape closes it:', !(await js(`!!document.querySelector('.modal')`)));
+  check('Escape closes it', !(await js(`!!document.querySelector('.modal')`)));
   await js(`[...document.querySelectorAll('.nav-item')].find((b) => /Startup apps|הפעלה עם Windows/.test(b.textContent))?.click()`); await wait(1200);
-  console.log('switches:', await js(`[...document.querySelectorAll('.toggle')].length + ' toggles, ' + [...document.querySelectorAll('[role=switch][aria-checked]')].length + ' with role=switch'`));
-  console.log('renderer errors:', errors.length ? errors.join(' | ') : 'none');
-  app.exit(0);
+  const sw = await js(`[[...document.querySelectorAll('.toggle')].length, [...document.querySelectorAll('[role=switch][aria-checked]')].length]`);
+  check('every startup switch is a labelled switch', sw[0] > 0 && sw[0] === sw[1], sw);
+  check('no renderer errors', errors.length === 0, errors);
+  finish();
 });

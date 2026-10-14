@@ -52,6 +52,10 @@ const CHECK = `(() => {
   return { overlaps: [...new Set(o)].slice(0, 10), pageScroll: document.querySelector('.main').scrollHeight > document.querySelector('.main').clientHeight + 2, wide: document.documentElement.scrollWidth > innerWidth + 1, sideScroll: document.querySelector('.sidebar').scrollHeight > document.querySelector('.sidebar').clientHeight + 2 };
 })()`;
 
+const failures = [];
+const check = (name, cond, got) => { console.log(`${cond ? 'PASS' : 'FAIL'} ${name}${got !== undefined ? ` (${JSON.stringify(got)})` : ''}`); if (!cond) failures.push(name); };
+const finish = () => { console.log(failures.length ? `${failures.length} FAILED` : 'ALL PASSED'); app.exit(failures.length ? 1 : 0); };
+
 app.whenReady().then(async () => {
   require(path.join(tune, 'electron', 'main.cjs'));
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -76,7 +80,7 @@ app.whenReady().then(async () => {
       for (const [label, re] of [['center', /מרכז ביצועים|Performance center/], ['perf', /מעבד וזיכרון|CPU & memory/], ['overview', /סקירה|Overview/]]) {
         await nav(idx(re)); await wait(2600);
         const r = await js(CHECK);
-        console.log(`${lang} ${w}x${h} ${label}`, r.pageScroll ? 'PAGE-SCROLLS' : '', r.wide ? 'SIDEWAYS' : '', r.sideScroll ? 'SIDEBAR-SCROLLS' : '', r.overlaps.length ? r.overlaps.join(' | ') : 'ok');
+        check(`${lang} ${w}x${h} ${label}: no overlap, no page/sidebar scroll, nothing sideways`, !r.pageScroll && !r.wide && !r.sideScroll && !r.overlaps.length, r.overlaps.length ? r.overlaps : undefined);
         await shot(`tune-${lang}-${w}-${label}.png`);
       }
       // the channels guide
@@ -84,11 +88,10 @@ app.whenReady().then(async () => {
       const opened = await js(`(() => { const b = [...document.querySelectorAll('.drow')].find((r) => /ערוצי זיכרון|Memory channels/.test(r.textContent))?.querySelector('button'); if (b) b.click(); return !!b; })()`);
       await wait(500);
       const g = await js(CHECK);
-      console.log(`${lang} ${w}x${h} guide`, opened ? '' : 'NOT-OPENED', g.overlaps.length ? g.overlaps.join(' | ') : 'ok');
+      check(`${lang} ${w}x${h} guide${opened ? '' : ' (not offered on this PC)'}: no overlap`, !g.overlaps.length, g.overlaps.length ? g.overlaps : undefined);
       await shot(`tune-${lang}-${w}-guide.png`);
       await js(`document.querySelector('.modal .icon-btn')?.click()`); await wait(300);
     }
   }
-  console.log('ROWS', (await js(`[...document.querySelectorAll('.drow .dname')].map((d) => d.textContent).join(' || ')`)).slice(0, 1500));
-  app.exit(0);
+  finish();
 });

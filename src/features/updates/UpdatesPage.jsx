@@ -52,7 +52,7 @@ export function UpdatesPage({ hw, wu, gpu, bios, sources, scan, soundKey, onScan
       <div className="stats tiled">
         <div className="stat"><i className="stat-tile"><HardDrive size={20} /></i><span>{t('up.stScanned')}</span><b>{hw ? hw.devices.length : '…'}</b></div>
         <div className="stat"><i className="stat-tile"><Download size={20} /></i><span>{t('up.stAvailable')}</span><b style={{ color: 'var(--accent)' }}>{loading ? '…' : total}</b></div>
-        <div className="stat"><i className="stat-tile"><CircleCheck size={20} /></i><span>{t('up.stUpToDate')}</span><b>{hw && !loading ? hw.devices.length - (wu?.length || 0) : '…'}</b></div>
+        <div className="stat"><i className="stat-tile"><CircleCheck size={20} /></i><span>{t('up.stUpToDate')}</span><b>{loading ? '…' : hw && sources?.wu === 'ok' ? hw.devices.length - (wu?.length || 0) : '—'}</b></div>
         <div className="stat"><i className="stat-tile"><CircleAlert size={20} /></i><span>{t('up.stAttention')}</span><b style={{ color: problems.length ? '#b45309' : undefined }}>{hw ? problems.length : '…'}</b></div>
       </div>
       <section className="panel">

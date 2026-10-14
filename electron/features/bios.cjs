@@ -61,14 +61,22 @@ async function asusBiosFiles(model) {
     `https://www.asus.com/support/webapi/ProductV2/GetPDBIOS?website=global&model=${encodeURIComponent(model).replace(/%20/g, '+')}&pdhashedid=&pdid=99999&cpu=&siteID=www&sitelang=`,
     `https://www.asus.com/support/api/product.asmx/GetPDBIOS?website=global&model=${encodeURIComponent(model)}`,
   ];
+  // An empty list is only "this board has no BIOS files" when ASUS actually answered; when neither
+  // address gives a valid answer (network, HTTP error, bad JSON, "FAIL"), the check failed.
+  let answered = false;
+  const failures = [];
   for (const url of urls) {
     try {
-      const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36', Accept: 'application/json' } });
+      const r = await fetch(url, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36', Accept: 'application/json' } });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = await r.json();
-      const files = (j?.Result?.Obj || []).find((o) => o.Name === 'BIOS')?.Files || [];
+      if (!j || String(j.Status).toUpperCase() === 'FAIL' || j.Result == null) throw new Error(`ASUS answered ${j?.Status || 'nothing'}`);
+      answered = true;
+      const files = (j.Result.Obj || []).find((o) => o.Name === 'BIOS')?.Files || [];
       if (files.length) return files;
-    } catch { /* try the next one */ }
+    } catch (e) { failures.push(String(e.message || e)); /* try the next one */ }
   }
+  if (!answered) throw new Error(`ASUS BIOS list unavailable (${failures.join('; ')})`);
   return [];
 }
 

@@ -5,7 +5,7 @@ import { api } from '../../api.js';
 import { useT } from '../../i18n.js';
 import { fmtGB } from '../../presentation/format.jsx';
 
-export function CleanPage({ junk, onRescan, onClean, busy }) {
+export function CleanPage({ junk, failed, onRescan, onClean, busy }) {
   const t = useT();
   const [sel, setSel] = useState({});
   useEffect(() => { if (junk) setSel(Object.fromEntries(junk.map((c) => [c.key, c.bytes > 0]))); }, [junk]);
@@ -18,7 +18,8 @@ export function CleanPage({ junk, onRescan, onClean, busy }) {
         <button className="btn-ghost" onClick={onRescan} disabled={!!busy}><RefreshCw size={14} /> {t('cl.rescan')}</button>
       </header>
       <section className="panel">
-        <div className="panel-title">{junk ? t('cl.found', { size: fmtGB((junk || []).reduce((s, c) => s + c.bytes, 0)) }) : t('scanning')}</div>
+        {failed && <div className="finding warn scan-failed">{t(junk ? 'scan.failedLast' : 'scan.failedNone')}</div>}
+        <div className="panel-title">{junk ? t('cl.found', { size: fmtGB((junk || []).reduce((s, c) => s + c.bytes, 0)) }) : failed ? t('rec.unchecked') : t('scanning')}</div>
         {(junk || []).map((c) => {
           const dirs = [].concat(c.dirs || []);
           const label = t(`junk.${c.key}`);

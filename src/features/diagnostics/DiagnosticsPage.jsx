@@ -7,9 +7,9 @@ import { LiveCpu } from '../sensors/CpuMetrics.jsx';
 import { CenterRow } from './FindingRow.jsx';
 import { GROUPS, centerItems, statusRank } from './findingSelectors.js';
 
-export function CenterPage({ recs, bios, gpu, junk, startup, live, history, service, onInstallService, onRefresh, onGuide, onBiosGuide, go, ...rowProps }) {
+export function CenterPage({ recs, bios, gpu, junk, startup, live, history, sources, service, onInstallService, onRefresh, onGuide, onBiosGuide, go, ...rowProps }) {
   const t = useT();
-  const items = useMemo(() => centerItems({ recs, bios, gpu, junk, startup, live, history }), [recs, bios, gpu, junk, startup, live, history]);
+  const items = useMemo(() => centerItems({ recs, bios, gpu, junk, startup, live, history, sources }), [recs, bios, gpu, junk, startup, live, history, sources]);
   const judged = items.filter((i) => i.ok != null);
   const good = judged.filter((i) => i.ok).length;
   return (

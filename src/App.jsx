@@ -111,13 +111,13 @@ export default function App() {
           <Banner msg={shownMsg} onClose={() => setMsg(null)} />
           {page === 'updates' && <UpdatesPage hw={hw} wu={wu} gpu={gpu} bios={bios} sources={sources} scan={scan} soundKey={settings?.sound !== false && fresh.wu && !scan.running ? scan.at : null} busy={lockWhile(scan.running)} onScan={fullScan} onInstall={installDrivers} onGpu={gpuInstall} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} onEnable={enable} prog={prog} />}
           {page === 'hardware' && <HardwarePage hw={hw} onExport={exportHw} />}
-          {page === 'overview' && <OverviewPage junk={junk} startup={startup} perf={perf} live={live} recs={recs && centerItems({ recs, bios, gpu, junk, startup, live, history })} go={setPage} />}
-          {page === 'clean' && <CleanPage junk={junk} onRescan={() => { setJunk(null); loadJunk(); }} onClean={clean} busy={lockWhile(stale('junk'))} />}
-          {page === 'startup' && <StartupPage startup={startup} onToggle={toggle} busy={lockWhile(stale('startup'))} prog={prog} />}
+          {page === 'overview' && <OverviewPage junk={junk} startup={startup} perf={perf} live={live} recs={recs && centerItems({ recs, bios, gpu, junk, startup, live, history, sources })} go={setPage} sources={sources} />}
+          {page === 'clean' && <CleanPage junk={junk} failed={sources.junk === 'error'} onRescan={() => { setJunk(null); loadJunk(); }} onClean={clean} busy={lockWhile(stale('junk'))} />}
+          {page === 'startup' && <StartupPage startup={startup} failed={sources.startup === 'error'} onToggle={toggle} busy={lockWhile(stale('startup'))} prog={prog} />}
           {page === 'perf' && <PerfPage perf={perf} live={live} history={history} service={service} onRefresh={() => { setPerf(null); loadPerf(); }} onInstallService={installService} busy={busy} />}
           {page === 'recs' && (
             <CenterPage
-              recs={recs} bios={bios} gpu={gpu} junk={junk} startup={startup} live={live} history={history} service={service} go={setPage}
+              recs={recs} bios={bios} gpu={gpu} junk={junk} startup={startup} live={live} history={history} sources={sources} service={service} go={setPage}
               onInstallService={installService} onRefresh={() => { setRecs(null); loadRecs(); }}
               onApply={apply} onBiosDownload={biosDownload} onBiosGuide={() => (bios?.latest ? setGuide(true) : setPage('updates'))}
               onGuide={setSettingGuide} busy={lockWhile(stale('recs'))} prog={prog}

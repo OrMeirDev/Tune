@@ -21,8 +21,8 @@ export const recValue = (r, t) => ({
   memSpeed: r.rated ? t('rec.memSpeed.value', { now: r.configured, rated: r.rated }) : `${r.configured} MT/s`,
   trim: t(r.on ? 'on' : 'off'),
   gpuDriver: t(r.ok ? 'rec.gpuDriver.latest' : 'rec.gpuDriver.newer', { v: r.latest }),
-  junk: fmtGB(r.bytes),
-  startup: t('rec.startup.value', { n: r.n }),
+  junk: r.unchecked ? t('rec.unchecked') : fmtGB(r.bytes),
+  startup: r.unchecked ? t('rec.unchecked') : t('rec.startup.value', { n: r.n }),
 }[r.key] ?? '');
 
 // A short "why" for every recommendation...

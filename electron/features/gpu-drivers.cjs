@@ -6,31 +6,43 @@ const { cmpVer } = require('../domain/versions.cjs');
 const { downloadFile } = require('../infra/download.cjs');
 const { runPS } = require('../infra/powershell.cjs');
 
+// A maker's page or API: an HTTP error, a time-out or an empty answer is a failure, never "no update".
+const MAKER_TIMEOUT_MS = 20000;
+async function makerFetch(url, headers = {}) {
+  const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', ...headers }, signal: AbortSignal.timeout(MAKER_TIMEOUT_MS) });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r;
+}
+
 // Graphics drivers: Windows Update lags behind the GPU makers, so check their official sites too.
+// Every GPU gets a status: 'ok' (the maker answered, newer or not), 'error' (the check failed, so
+// whether there is a newer driver is unknown), 'unsupported' (Tune can't check this card).
 async function gpuVendorCheck(gpus, amdSoftware) {
   const out = [];
   for (const g of gpus || []) {
     if (/AMD|Radeon/i.test(g.name)) {
       try {
-        const html = await (await fetch('https://www.amd.com/en/support/download/drivers.html', { headers: { 'User-Agent': 'Mozilla/5.0' } })).text();
+        const html = await (await makerFetch('https://www.amd.com/en/support/download/drivers.html')).text();
         const url = (html.match(/https:\/\/drivers\.amd\.com\/drivers\/installer\/[^"'\s]+minimalsetup[^"'\s]+\.exe/) || [])[0];
         const ver = url && (url.match(/adrenalin-edition-([\d.]+)-/) || [])[1];
+        // the page answered but without a driver link: changed or blocked, so the result is unknown
+        if (!ver) throw new Error("no driver link on AMD's page");
         out.push({
-          gpu: g.name, vendor: 'AMD', installed: g.driverVersion, package: amdSoftware || null, latest: ver || null, url: url || null,
+          status: 'ok', gpu: g.name, vendor: 'AMD', installed: g.driverVersion, package: amdSoftware || null, latest: ver || null, url: url || null,
           title: ver ? `AMD Software ${ver}` : null,
           // Unknown package version: offer it rather than hide a possible update.
           newer: !!ver && (!amdSoftware || cmpVer(ver, amdSoftware) > 0),
           page: 'https://www.amd.com/en/support/download/drivers.html',
         });
       } catch (e) {
-        out.push({ gpu: g.name, vendor: 'AMD', installed: g.driverVersion, error: String(e.message || e), page: 'https://www.amd.com/en/support/download/drivers.html' });
+        out.push({ status: 'error', gpu: g.name, vendor: 'AMD', installed: g.driverVersion, error: String(e.message || e), page: 'https://www.amd.com/en/support/download/drivers.html' });
       }
     } else if (/NVIDIA|GeForce|RTX|GTX|Quadro/i.test(g.name)) {
       out.push(await nvidiaCheck(g));
     } else if (/Intel.*Arc/i.test(g.name)) {
       // intel.com only serves its download pages to browsers; Windows Update carries Intel's
       // releases, and the official page is one click away.
-      out.push({ gpu: g.name, vendor: 'Intel', installed: g.driverVersion, latest: null, url: null, newer: false,
+      out.push({ status: 'unsupported', gpu: g.name, vendor: 'Intel', installed: g.driverVersion, latest: null, url: null, newer: false,
         page: 'https://www.intel.com/content/www/us/en/download/785597/intel-arc-iris-xe-graphics-windows.html' });
     }
   }
@@ -46,24 +58,28 @@ async function nvidiaCheck(g) {
   try {
     const norm = (s) => String(s).replace(/^NVIDIA\s+/i, '').replace(/\s+/g, ' ').trim().toLowerCase();
     if (!nvidiaProducts) {
-      const xml = await (await fetch('https://www.nvidia.com/Download/API/lookupValueSearch.aspx?TypeID=3', { headers: { 'User-Agent': 'Mozilla/5.0' } })).text();
-      nvidiaProducts = [...xml.matchAll(/<LookupValue ParentID="(\d+)">\s*<Name>([^<]+)<\/Name>\s*<Value>(\d+)<\/Value>/g)].map((m) => ({ psid: m[1], name: m[2], pfid: m[3] }));
+      const xml = await (await makerFetch('https://www.nvidia.com/Download/API/lookupValueSearch.aspx?TypeID=3')).text();
+      const list = [...xml.matchAll(/<LookupValue ParentID="(\d+)">\s*<Name>([^<]+)<\/Name>\s*<Value>(\d+)<\/Value>/g)].map((m) => ({ psid: m[1], name: m[2], pfid: m[3] }));
+      // an empty list is a broken answer: not kept, so the next check asks again
+      if (!list.length) throw new Error("NVIDIA's product list was empty");
+      nvidiaProducts = list;
     }
     const p = nvidiaProducts.find((x) => norm(x.name) === norm(g.name));
-    if (!p) return base;
+    // a card NVIDIA's finder doesn't list can't be checked here (not a failure, nothing to retry)
+    if (!p) return { ...base, status: 'unsupported' };
     const osId = Number(os.release().split('.')[2]) >= 22000 ? 135 : 57; // Windows 11 : Windows 10
-    const j = await (await fetch(`https://gfwsl.geforce.com/services_toolkit/services/com/nvidia/services/AjaxDriverService.php?func=DriverManualLookup&psid=${p.psid}&pfid=${p.pfid}&osID=${osId}&languageCode=1033&isWHQL=1&dch=1&sort1=0&numberOfResults=1`)).json();
+    const j = await (await makerFetch(`https://gfwsl.geforce.com/services_toolkit/services/com/nvidia/services/AjaxDriverService.php?func=DriverManualLookup&psid=${p.psid}&pfid=${p.pfid}&osID=${osId}&languageCode=1033&isWHQL=1&dch=1&sort1=0&numberOfResults=1`)).json();
     const d = j?.IDS?.[0]?.downloadInfo;
-    if (!d?.Version || !d.DownloadURL) return base;
+    if (!d?.Version || !d.DownloadURL) throw new Error("no driver in NVIDIA's answer");
     // Windows shows NVIDIA drivers as 32.0.15.6636; NVIDIA calls that 566.36 (the last five digits).
     const digits = String(g.driverVersion || '').split('.').slice(-2).join('');
     const installed = digits.length >= 5 ? `${digits.slice(-5, -2)}.${digits.slice(-2)}` : null;
     return {
-      ...base, latest: d.Version, url: d.DownloadURL, size: d.DownloadURLFileSize, title: `${decodeURIComponent(d.Name)} ${d.Version}`,
+      ...base, status: 'ok', latest: d.Version, url: d.DownloadURL, size: d.DownloadURLFileSize, title: `${decodeURIComponent(d.Name)} ${d.Version}`,
       package: installed, newer: !installed || cmpVer(d.Version, installed) > 0,
     };
   } catch (e) {
-    return { ...base, error: String(e.message || e) };
+    return { ...base, status: 'error', error: String(e.message || e) };
   }
 }
 

@@ -23,6 +23,10 @@ const sys = require(path.join(tune, 'electron', 'system.cjs'));
 let downloads = 0;
 sys.downloadBios = async () => { downloads++; return { ok: true, data: 'x' }; };
 sys.biosCheck = async () => ({ ok: true, data: { supported: true, newer: false, maker: 'ASUS' } }); // nothing newer offered
+const failures = [];
+const check = (name, cond, got) => { console.log(`${cond ? 'PASS' : 'FAIL'} ${name}${got !== undefined ? ` (${JSON.stringify(got)})` : ''}`); if (!cond) failures.push(name); };
+const finish = () => { console.log(failures.length ? `${failures.length} FAILED` : 'ALL PASSED'); app.exit(failures.length ? 1 : 0); };
+
 app.whenReady().then(async () => {
   require(path.join(tune, 'electron', 'main.cjs'));
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -34,14 +38,18 @@ app.whenReady().then(async () => {
   while (!(await js(`document.querySelectorAll('.nav-item').length`))) await wait(50);
   for (let i = 0; i < 180 && (await js(`!!document.querySelector('.dot-off')`)); i++) await wait(1000);
   const startUrl = win.webContents.getURL();
-  console.log('BIOS not offered:', JSON.stringify(await js(`window.tune.biosDownload('bios')`)), '| downloads run:', downloads);
-  console.log('malformed export:', JSON.stringify(await js(`window.tune.exportHardware('exe')`)));
-  console.log('folder outside the scan:', JSON.stringify(await js(`window.tune.openFolder('C:\\Windows')`)));
-  console.log('link not https:', JSON.stringify(await js(`window.tune.openLink('file:///C:/Windows/notepad.exe')`)));
-  console.log('window.open:', await js(`String(window.open('https://example.com'))`), '| windows:', BrowserWindow.getAllWindows().length);
+  const bios = await js(`window.tune.biosDownload('bios')`);
+  check('a BIOS that was not offered is refused, nothing downloaded', bios?.ok === false && downloads === 0, bios);
+  const exp = await js(`window.tune.exportHardware('exe')`);
+  check('a malformed request is refused', exp?.ok === false && exp.error === 'invalid request', exp);
+  check('a folder outside the scan is not opened', (await js(`window.tune.openFolder('C:\\Windows')`)) == null);
+  const link = await js(`window.tune.openLink('file:///C:/Windows/notepad.exe')`);
+  check('a non-https link is refused', link?.ok === false, link);
+  const opened = await js(`String(window.open('https://example.com'))`);
+  check('window.open is blocked', opened === 'null' && BrowserWindow.getAllWindows().length === 1, opened);
   await js(`location.href = 'https://example.com'`); await wait(1500);
-  console.log('navigate away blocked:', win.webContents.getURL() === startUrl);
-  console.log('inline script blocked by CSP:', await js(`(() => { const s = document.createElement('script'); s.textContent = 'window.__ran = 1'; document.body.append(s); return window.__ran === undefined; })()`));
-  console.log('page still works:', await js(`document.querySelectorAll('.nav-item').length`), 'nav items');
-  app.exit(0);
+  check('navigating away is blocked', win.webContents.getURL() === startUrl);
+  check('an injected inline script is blocked by the CSP', await js(`(() => { const s = document.createElement('script'); s.textContent = 'window.__ran = 1'; document.body.append(s); return window.__ran === undefined; })()`));
+  check('the page still works', (await js(`document.querySelectorAll('.nav-item').length`)) > 5);
+  finish();
 });

@@ -9,7 +9,7 @@ export const GROUPS = [
   { id: 'gpu', icon: Monitor }, { id: 'storage', icon: HardDrive }, { id: 'windows', icon: Settings2 },
 ];
 
-export function centerItems({ recs, bios, gpu, junk, startup, live, history = [] }) {
+export function centerItems({ recs, bios, gpu, junk, startup, live, history = [], sources = {} }) {
   const recent = median(history.map((h) => h.cpuTempC).filter((x) => x != null));
   const items = (recs || []).map((r) => {
     // BIOS: checked against the maker's site, so its status comes from the BIOS check.
@@ -30,11 +30,14 @@ export function centerItems({ recs, bios, gpu, junk, startup, live, history = []
     const g = drivers.find((x) => x.newer && x.url) || drivers[0];
     items.push({ key: 'gpuDriver', group: 'gpu', ok: !(g.newer && g.url), latest: g.latest, vendor: g.vendor, go: 'updates' });
   }
-  if (junk) {
+  // a scan that failed this time is "not checked" (ok: null), not a measured zero
+  if (sources.junk === 'error') items.push({ key: 'junk', group: 'storage', unchecked: true, ok: null, go: 'clean' });
+  else if (junk) {
     const bytes = junk.reduce((s, c) => s + c.bytes, 0);
     items.push({ key: 'junk', group: 'storage', bytes, ok: bytes < 5e9, go: 'clean' });
   }
-  if (startup) {
+  if (sources.startup === 'error') items.push({ key: 'startup', group: 'windows', unchecked: true, ok: null, go: 'startup' });
+  else if (startup) {
     const n = startup.filter((s) => s.enabled).length;
     items.push({ key: 'startup', group: 'windows', n, ok: n <= 12, go: 'startup' });
   }
