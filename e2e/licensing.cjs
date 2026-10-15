@@ -52,7 +52,14 @@ app.on('window-all-closed', () => {});
 const run = createRun({ exit: (code) => app.exit(code) });
 const { check } = run;
 let server = null;
-run.onCleanup(() => fs.rmSync(work, { recursive: true, force: true }));
+// Cleanup, last registered runs first: the server stops; its database and keys and Tune's licence
+// file go at once (retried while the server's process lets go of them); the rest of the folder is
+// the app's own Chromium profile, which the running app holds open (on Windows it can't be deleted
+// yet), so a small process removes it after the app has exited.
+run.onCleanup(() => spawn('node', ['-e', 'setTimeout(() => require("fs").rmSync(process.argv[1], { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }), 3000)', work], { detached: true, stdio: 'ignore', windowsHide: true }).unref());
+run.onCleanup(() => {
+  for (const f of [DB, `${DB}-wal`, `${DB}-shm`, KEYS, path.join(work, 'profile', 'license.bin')]) fs.rmSync(f, { force: true, maxRetries: 20, retryDelay: 100 });
+});
 run.onCleanup(() => { if (server) server.kill(); });
 
 // ---- the licensing server PoC, on a fixed free port (so it can be stopped and started again) ----

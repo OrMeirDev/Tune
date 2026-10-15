@@ -84,7 +84,7 @@ async function packagedIgnoresOverrides() {
     const d = status && status.data;
     check('packaged: licensing is not open although TUNE_LICENSING_URL is set', d && d.available === false && !d.development, d);
     check('packaged: storage is DPAPI, never the test-only storage', d && d.storage === 'dpapi', d && d.storage);
-    check('packaged: no licence, and nothing configured', d && d.license && d.license.state === 'none' && !d.problem, d && d.license);
+    check('packaged: no licence; licensing reported as not configured (not misconfigured)', d && d.license && d.license.state === 'none' && d.problem === 'notConfigured', d && { problem: d.problem, state: d.license && d.license.state });
     const gate = await dt.evaluate("window.tune.junkClean(['not-a-category'])");
     check('packaged: the shipped open policy gates nothing (an enforcing override is ignored)', gate && gate.error !== 'not entitled', gate);
     dt.close();
