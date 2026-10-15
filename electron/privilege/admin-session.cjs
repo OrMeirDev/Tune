@@ -1,9 +1,8 @@
 // The admin session: one UAC prompt covers the next 10 minutes of admin operations (used when the
 // background service is not installed).
-const { PRELUDE } = require('../infra/powershell.cjs');
 const { JUNK, OPS_TABLE, STARTUP } = require('./operations.cjs');
 const { pipeCall, wait, PIPE_SERVER_PS } = require('./pipe.cjs');
-const { newPipeName, startElevated } = require('./elevated.cjs');
+const { ELEVATED_PRELUDE, newPipeName, startElevated } = require('./elevated.cjs');
 
 // One UAC approval starts an elevated helper that serves Tune for the next 10 minutes, so
 // installing several drivers or flipping several switches asks once. It runs only the fixed
@@ -15,7 +14,7 @@ const ADMIN_WINDOW_S = 10 * 60;
 
 let admin = null; // { pipe, until }
 
-const adminHelper = (pipeName, tunePid) => `${PRELUDE}${PIPE_SERVER_PS}${STARTUP}${JUNK}${OPS_TABLE()}
+const adminHelper = (pipeName, tunePid) => `${ELEVATED_PRELUDE}${PIPE_SERVER_PS}${STARTUP}${JUNK}${OPS_TABLE()}
 $tunePid = ${Number(tunePid) || 0}
 $deadline = (Get-Date).AddSeconds(${ADMIN_WINDOW_S})
 $until = ([DateTimeOffset]$deadline).ToUnixTimeMilliseconds()

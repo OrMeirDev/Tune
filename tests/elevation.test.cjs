@@ -45,6 +45,16 @@ test('the elevated script travels in the command line, compressed, and comes bac
   }
 });
 
+test('elevated PowerShell loads modules only from its own folder, never from the user\'s Documents', () => {
+  const { ELEVATED_PRELUDE } = require(path.join(EL, 'elevated.cjs'));
+  const pin = "$env:PSModulePath=[IO.Path]::Combine($PSHOME,'Modules');";
+  assert.ok(ELEVATED_PRELUDE.startsWith(pin));
+  for (const s of [adminHelper('TuneAdmin-x', 1), oneShotScript('TuneElevated-x', service.installScript(longSrc, sample)), oneShotScript('TuneElevated-x', service.uninstallScript())]) {
+    assert.ok(s.startsWith(pin), 'the script pins it first');
+    assert.ok(unwrap(encodedCommand(s)).boot.startsWith(pin), 'and so does the bootstrap, before anything else runs');
+  }
+});
+
 test('the privileged modules never write a script or a result file for an elevated process', () => {
   for (const f of ['elevated.cjs', 'admin-session.cjs', 'service.cjs', 'pipe.cjs']) {
     const src = fs.readFileSync(path.join(EL, f), 'utf8');

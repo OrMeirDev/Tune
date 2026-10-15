@@ -4,7 +4,12 @@
 //   the admin catalog fits well under Windows' 32,767-character limit), never as a file in a folder
 //   the user can write to, so it can't be swapped between writing and elevation;
 // - the elevated process answers through a named pipe it creates itself (privilege/pipe.cjs), never
-//   by writing files into the user's folders, so nothing it writes can be redirected by a link.
+//   by writing files into the user's folders, so nothing it writes can be redirected by a link;
+// - it loads PowerShell modules only from Windows PowerShell's own folder ($PSHOME\Modules, which only
+//   administrators can change): by default the user's Documents\WindowsPowerShell\Modules comes first,
+//   where any program running as the user could plant a module named like a built-in one (Set-Acl's,
+//   say) that the elevated script would then load. Pinned first thing in the bootstrap and again in
+//   the script (ELEVATED_PRELUDE).
 const crypto = require('crypto');
 const { spawn } = require('child_process');
 const zlib = require('zlib');
@@ -17,9 +22,12 @@ const ELEVATED_ARGS = ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Byp
 
 // The value of -EncodedCommand: a short bootstrap that decompresses `script` from inside the command
 // line itself and runs it.
+const PIN_MODULES = "$env:PSModulePath=[IO.Path]::Combine($PSHOME,'Modules');";
+const ELEVATED_PRELUDE = `${PIN_MODULES}\n${PRELUDE}`;
+
 function encodedCommand(script) {
   const gz = zlib.gzipSync(Buffer.from(script, 'utf8'), { level: 9 }).toString('base64');
-  const boot = `$b=[Convert]::FromBase64String('${gz}');$m=New-Object IO.MemoryStream(,$b);`
+  const boot = `${PIN_MODULES}$b=[Convert]::FromBase64String('${gz}');$m=New-Object IO.MemoryStream(,$b);`
     + '$z=New-Object IO.Compression.GZipStream($m,[IO.Compression.CompressionMode]::Decompress);'
     + '$s=(New-Object IO.StreamReader($z,[Text.Encoding]::UTF8)).ReadToEnd();. ([ScriptBlock]::Create($s))';
   const enc = Buffer.from(boot, 'utf16le').toString('base64');
@@ -47,7 +55,7 @@ const newPipeName = (prefix) => `${prefix}-${crypto.randomBytes(12).toString('he
 // A one-off elevated script (one approval prompt, then it exits), for installing or removing the
 // service: `body` runs with Report-Progress and leaves its answer in $result. It serves exactly one
 // connection on its own pipe; Tune connects, asks it to run, and reads progress and the result.
-const oneShotScript = (pipeName, body) => `${PRELUDE}${PIPE_SERVER_PS}
+const oneShotScript = (pipeName, body) => `${ELEVATED_PRELUDE}${PIPE_SERVER_PS}
 $pipe = New-TunePipe '${pipeName}'
 try {
   $ar = $pipe.BeginWaitForConnection($null, $null)
@@ -78,4 +86,4 @@ async function runElevated(body, { timeoutMs = 10 * 60 * 1000, onProgress } = {}
   return { ok: false, error: 'the elevated step did not start' };
 }
 
-module.exports = { COMMAND_LINE_MAX, encodedCommand, elevatedArgs, startElevated, newPipeName, oneShotScript, runElevated };
+module.exports = { COMMAND_LINE_MAX, ELEVATED_PRELUDE, encodedCommand, elevatedArgs, startElevated, newPipeName, oneShotScript, runElevated };

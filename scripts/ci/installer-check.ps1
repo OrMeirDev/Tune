@@ -67,13 +67,47 @@ if (-not $running) {
 $bin = ServicePath
 Check "install: it runs from its own version folder in Program Files ($expected)" ($bin -like "*$svcRoot\v$expected-*\TuneService.exe*") $bin
 Check 'install: as LocalSystem' ((Get-CimInstance Win32_Service -Filter "Name='TuneService'").StartName -eq 'LocalSystem')
-$current = Join-Path $svcRoot ((Folders) | Where-Object { $bin -like "*\$_\*" } | Select-Object -First 1)
-$writers = @(Writers $svcRoot) + @(Writers $current)
-Check 'install: only administrators and SYSTEM can change the service folders' ($writers.Count -eq 0) ($writers -join ', ')
-$mismatch = @($manifest.files.PSObject.Properties | Where-Object { (Get-FileHash -LiteralPath (Join-Path $current $_.Name) -Algorithm SHA256).Hash -ne $_.Value } | ForEach-Object Name)
-Check 'install: every file in the service folder matches the manifest built with this version' ($mismatch.Count -eq 0) ($mismatch -join ', ')
+$folder = (Folders) | Where-Object { $bin -like "*\$_\*" } | Select-Object -First 1
+$current = if ($folder) { Join-Path $svcRoot $folder } else { $null }
+Check 'install: the version folder exists' ([bool]$current) ((Folders) -join ', ')
+if ($current) {
+  $writers = @(Writers $svcRoot) + @(Writers $current)
+  Check 'install: only administrators and SYSTEM can change the service folders' ($writers.Count -eq 0) ($writers -join ', ')
+  $mismatch = @($manifest.files.PSObject.Properties | Where-Object { -not (Test-Path -LiteralPath (Join-Path $current $_.Name)) -or (Get-FileHash -LiteralPath (Join-Path $current $_.Name) -Algorithm SHA256).Hash -ne $_.Value } | ForEach-Object Name)
+  Check 'install: every file in the service folder matches the manifest built with this version' ($mismatch.Count -eq 0) ($mismatch -join ', ')
+}
 $v = Version
 Check "service: answers the version request with $expected" ($v.ok -and [string]$v.data.version -eq $expected) ($v | ConvertTo-Json -Compress)
+
+# 1b) who may ask the installed service for a change (TUN-01): an administrator yes, a standard user
+#     no ("notAllowed"); both may ask the read-only version. The change asked for cleans no category,
+#     so it changes nothing even where it is allowed (scripts/ci/service-probe.cjs).
+$admin = (node scripts/ci/service-probe.cjs noop-change) | ConvertFrom-Json
+Check 'TUN-01: an administrator may ask for a change' ($admin.ok -and [int64]$admin.data.freed -eq 0) ($admin | ConvertTo-Json -Compress)
+$user = 'tunestd'
+$pw = 'Tn-' + [guid]::NewGuid().ToString('N').Substring(0, 16) + '!a1'
+& net.exe user $user $pw /add | Out-Null
+try {
+  $probe = 'C:\Users\Public\tune-service-probe.cjs'
+  Copy-Item -LiteralPath scripts/ci/service-probe.cjs -Destination $probe -Force
+  $cred = New-Object Management.Automation.PSCredential($user, (ConvertTo-SecureString $pw -AsPlainText -Force))
+  $node = (Get-Command node).Source
+  function As-Standard([string]$mode) {
+    $out = "C:\Users\Public\tune-probe-$mode.json"
+    Remove-Item -LiteralPath $out -ErrorAction SilentlyContinue
+    Start-Process -FilePath $node -ArgumentList $probe, $mode -Credential $cred -LoadUserProfile -WorkingDirectory 'C:\Users\Public' -RedirectStandardOutput $out -Wait -WindowStyle Hidden | Out-Null
+    (Get-Content -LiteralPath $out -Raw) | ConvertFrom-Json
+  }
+  $adminsGroup = (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')).Translate([Security.Principal.NTAccount]).Value.Split('\')[-1]
+  $isAdmin = @(& net.exe localgroup $adminsGroup) -contains $user
+  Check 'TUN-01: the second account is a standard user' (-not $isAdmin)
+  $sv = As-Standard 'version'
+  Check 'TUN-01: a standard user may ask the read-only version' ($sv.ok -and [string]$sv.data.version -eq $expected) ($sv | ConvertTo-Json -Compress)
+  $sc = As-Standard 'noop-change'
+  Check 'TUN-01: a standard user may not ask for a change (notAllowed)' ($sc.ok -eq $false -and $sc.code -eq 'notAllowed') ($sc | ConvertTo-Json -Compress)
+} finally {
+  & net.exe user $user /delete | Out-Null
+}
 
 # 2) a changed file in the per-user bundle is refused, and the running service is left alone (TUN-02)
 $bundle = Join-Path $inst 'resources\service'

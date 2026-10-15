@@ -36,7 +36,7 @@ function packedFiles() {
   for (const f of ['TuneService.exe', 'ops.ps1', 'LibreHardwareMonitorLib.dll']) check(`service bundle: ${f}`, fs.existsSync(path.join(service, f)));
   // the hashes the elevated installer checks the service files against travel inside the app
   check('packed: the service manifest', files.includes('/electron/privilege/service-manifest.json'));
-  const manifest = JSON.parse(asar.extractFile(archive, 'electron/privilege/service-manifest.json').toString('utf8'));
+  const manifest = JSON.parse(asar.extractFile(archive, path.join('electron', 'privilege', 'service-manifest.json')).toString('utf8'));
   const shipped = fs.readdirSync(service).filter((n) => /\.(exe|dll|ps1|txt)$/i.test(n)).sort();
   const wrong = shipped.filter((n) => manifest.files[n] !== crypto.createHash('sha256').update(fs.readFileSync(path.join(service, n))).digest('hex').toUpperCase());
   check('the manifest names every shipped service file with its SHA-256', JSON.stringify(Object.keys(manifest.files).sort()) === JSON.stringify(shipped) && wrong.length === 0, { shipped: shipped.length, wrong });

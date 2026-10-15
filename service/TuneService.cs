@@ -3,9 +3,16 @@
 // (the CPU via the PawnIO driver).
 //
 // Safety model:
-// - It lives in Program Files (only administrators can change its files).
-// - Its named pipe accepts connections only from users signed in at this PC.
+// - It lives in its own folder in Program Files, which only administrators and SYSTEM can change
+//   (the installer sets and checks that, and checks every file against the build's manifest).
+// - Its named pipe accepts connections only from users signed in at this PC. Anyone of them may ask
+//   the read-only questions (version, sensors); only a member of this PC's Administrators group may
+//   ask for a change (audit TUN-01). A UAC-filtered administrator counts, so Tune needs no prompt for
+//   them; a standard user is refused ("notAllowed") and Tune falls back to Windows' own prompt.
 // - It runs only the fixed operations in ops.ps1 (next to this exe), which re-check every request.
+// - Deadlines (audit TUN-06): a request line must arrive within 5 s; one change runs at a time (a second
+//   one waits 2 s, then hears "busy"); each operation has a time limit, after which it is ended
+//   together with every process it started (a Windows job object) and answered "timedOut".
 //
 // Built with the C# 5 compiler that ships with Windows (.NET Framework 4.8): scripts/build-service.cjs.
 using System;
@@ -51,7 +58,16 @@ namespace Tune
         // Another name only for testing a new build next to the installed service (--console --pipe X).
         static string PipeName = "TuneService";
         const int MaxRequest = 64 * 1024;
-        static readonly HashSet<string> Operations = new HashSet<string> { "drivers", "enable", "clean", "startup", "hags", "restore" };
+        const int Listeners = 6;
+        const int RequestDeadlineMs = 5000;
+        const int OperationWaitMs = 2000;
+        // The changes it can make, each with its time limit in minutes (longer than Tune itself waits).
+        static readonly Dictionary<string, int> Operations = new Dictionary<string, int>
+        {
+            { "drivers", 35 }, { "enable", 5 }, { "clean", 15 }, { "startup", 2 }, { "hags", 2 }, { "restore", 10 },
+        };
+        // Console runs only (testing a build as yourself, never the installed service): a shorter limit.
+        static int consoleOperationSeconds;
 
         readonly string dir = AppDomain.CurrentDomain.BaseDirectory;
         readonly object opLock = new object();
@@ -61,7 +77,11 @@ namespace Tune
         {
             if (args.Length > 0 && args[0] == "--console")
             {
-                if (args.Length > 2 && args[1] == "--pipe") PipeName = args[2];
+                for (int i = 1; i + 1 < args.Length; i += 2)
+                {
+                    if (args[i] == "--pipe") PipeName = args[i + 1];
+                    if (args[i] == "--op-seconds") consoleOperationSeconds = Math.Max(1, int.Parse(args[i + 1]));
+                }
                 var s = new TuneService();
                 s.OnStart(null);
                 Console.WriteLine("Tune Service running on \\\\.\\pipe\\" + PipeName + " - press Enter to stop");
@@ -82,7 +102,7 @@ namespace Tune
         // (a driver install can keep one busy for minutes).
         protected override void OnStart(string[] args)
         {
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < Listeners; i++)
             {
                 var t = new Thread(Listen);
                 t.IsBackground = true;
@@ -93,7 +113,7 @@ namespace Tune
         protected override void OnStop()
         {
             stopping = true;
-            for (int i = 0; i < 4; i++)
+            for (int i = 0; i < Listeners; i++)
                 try { using (var c = new NamedPipeClientStream(".", PipeName)) c.Connect(300); } catch (Exception) { }
             lock (SensorLock) { if (computer != null) computer.Close(); computer = null; }
         }
@@ -118,7 +138,7 @@ namespace Tune
                 try
                 {
                     pipe = new NamedPipeServerStream(PipeName, PipeDirection.InOut, NamedPipeServerStream.MaxAllowedServerInstances,
-                        PipeTransmissionMode.Byte, PipeOptions.None, 65536, 65536, Security());
+                        PipeTransmissionMode.Byte, PipeOptions.Asynchronous, 65536, 65536, Security());
                     pipe.WaitForConnection();
                     if (stopping) { pipe.Dispose(); break; }
                     Serve(pipe);
@@ -141,38 +161,160 @@ namespace Tune
                 writer.NewLine = "\n";
                 try
                 {
-                    string line = ReadLine(pipe);
+                    string line = ReadLine(pipe, RequestDeadlineMs);
                     if (line == null) return;
                     var req = new JavaScriptSerializer().DeserializeObject(line) as Dictionary<string, object>;
                     string op = req != null && req.ContainsKey("op") ? Convert.ToString(req["op"]) : "";
                     if (op == "version") { Send(writer, Ok(Info())); return; }
                     if (op == "sensors") { Send(writer, Ok(Sensors())); return; }
-                    if (!Operations.Contains(op)) { Send(writer, Fail("unknown request")); return; }
-                    lock (opLock) { RunOperation(line, writer); }
+                    if (!Operations.ContainsKey(op)) { Send(writer, Fail("unknown request", null)); return; }
+                    if (!CallerIsAdministrator(pipe))
+                    {
+                        Send(writer, Fail("only an administrator of this PC can ask the Tune service to change it", "notAllowed"));
+                        return;
+                    }
+                    if (!Monitor.TryEnter(opLock, OperationWaitMs))
+                    {
+                        Send(writer, Fail("another change is running; try again when it has finished", "busy"));
+                        return;
+                    }
+                    try
+                    {
+                        int limitMs = consoleOperationSeconds > 0 ? consoleOperationSeconds * 1000 : Operations[op] * 60 * 1000;
+                        RunOperation(line, writer, limitMs);
+                    }
+                    finally { Monitor.Exit(opLock); }
                 }
                 catch (Exception e)
                 {
-                    Send(writer, Fail(e.Message));
+                    Send(writer, Fail(e.Message, null));
                 }
             }
         }
 
-        static string ReadLine(Stream s)
+        // One line (up to MaxRequest bytes) within deadlineMs, or null: a client that connects and says
+        // nothing, or never finishes its line, is dropped (disposing the pipe ends the pending read).
+        static string ReadLine(Stream s, int deadlineMs)
         {
             var bytes = new List<byte>();
-            int b;
-            while ((b = s.ReadByte()) != -1)
+            var buf = new byte[4096];
+            DateTime end = DateTime.UtcNow.AddMilliseconds(deadlineMs);
+            while (true)
             {
-                if (b == '\n') break;
-                if (bytes.Count >= MaxRequest) return null;
-                bytes.Add((byte)b);
+                int left = (int)(end - DateTime.UtcNow).TotalMilliseconds;
+                if (left <= 0) return null;
+                IAsyncResult ar = s.BeginRead(buf, 0, buf.Length, null, null);
+                if (!ar.AsyncWaitHandle.WaitOne(left)) return null;
+                int n = s.EndRead(ar);
+                if (n <= 0) return null;
+                for (int i = 0; i < n; i++)
+                {
+                    if (buf[i] == (byte)'\n') return bytes.Count == 0 ? null : Encoding.UTF8.GetString(bytes.ToArray());
+                    if (bytes.Count >= MaxRequest) return null;
+                    bytes.Add(buf[i]);
+                }
             }
-            return bytes.Count == 0 ? null : Encoding.UTF8.GetString(bytes.ToArray());
         }
 
+        // ---------- who is asking (audit TUN-01) ----------
+
+        [DllImport("advapi32.dll", SetLastError = true)]
+        static extern bool GetTokenInformation(IntPtr token, int infoClass, IntPtr info, int length, out int returnLength);
+        const int TokenGroupsClass = 2;
+        static readonly SecurityIdentifier Administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+
+        // Whether the account at the other end of the pipe is a member of this PC's Administrators group:
+        // in its token either enabled (elevated) or "deny only" (an administrator whose token UAC
+        // filtered). Read while impersonating the client at the level it allowed; a client that allowed
+        // nothing (anonymous) is not an administrator.
+        static bool CallerIsAdministrator(NamedPipeServerStream pipe)
+        {
+            bool admin = false;
+            try
+            {
+                pipe.RunAsClient(delegate
+                {
+                    using (var id = WindowsIdentity.GetCurrent(TokenAccessLevels.Query))
+                        admin = !id.IsAnonymous && HasGroup(id.Token, Administrators);
+                });
+            }
+            catch (Exception) { admin = false; }
+            return admin;
+        }
+
+        // TOKEN_GROUPS: a count, then (SID pointer, attributes) pairs, each two pointers wide.
+        static bool HasGroup(IntPtr token, SecurityIdentifier group)
+        {
+            int len;
+            GetTokenInformation(token, TokenGroupsClass, IntPtr.Zero, 0, out len);
+            if (len <= 0) return false;
+            IntPtr buf = Marshal.AllocHGlobal(len);
+            try
+            {
+                if (!GetTokenInformation(token, TokenGroupsClass, buf, len, out len)) return false;
+                int count = Marshal.ReadInt32(buf);
+                for (int i = 0; i < count; i++)
+                {
+                    IntPtr sid = Marshal.ReadIntPtr(buf, IntPtr.Size + i * IntPtr.Size * 2);
+                    if (new SecurityIdentifier(sid) == group) return true;
+                }
+                return false;
+            }
+            finally { Marshal.FreeHGlobal(buf); }
+        }
+
+        // ---------- running an operation, with a deadline (audit TUN-06) ----------
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern IntPtr CreateJobObject(IntPtr attributes, string name);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool SetInformationJobObject(IntPtr job, int infoClass, ref ExtendedLimits info, int length);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool CloseHandle(IntPtr handle);
+
+        [StructLayout(LayoutKind.Sequential)]
+        struct BasicLimits
+        {
+            public long PerProcessUserTimeLimit; public long PerJobUserTimeLimit; public uint LimitFlags;
+            public UIntPtr MinimumWorkingSetSize; public UIntPtr MaximumWorkingSetSize; public uint ActiveProcessLimit;
+            public UIntPtr Affinity; public uint PriorityClass; public uint SchedulingClass;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        struct IoCounters { public ulong Reads, Writes, Others, ReadBytes, WriteBytes, OtherBytes; }
+        [StructLayout(LayoutKind.Sequential)]
+        struct ExtendedLimits
+        {
+            public BasicLimits Basic; public IoCounters Io;
+            public UIntPtr ProcessMemoryLimit; public UIntPtr JobMemoryLimit; public UIntPtr PeakProcessMemoryUsed; public UIntPtr PeakJobMemoryUsed;
+        }
+        const int JobObjectExtendedLimitInformation = 9;
+        const uint KillOnJobClose = 0x2000;
+
+        // A job whose processes all end when it is closed or terminated (IntPtr.Zero if Windows refused).
+        static IntPtr NewKillJob()
+        {
+            IntPtr job = CreateJobObject(IntPtr.Zero, null);
+            if (job == IntPtr.Zero) return IntPtr.Zero;
+            var info = new ExtendedLimits();
+            info.Basic.LimitFlags = KillOnJobClose;
+            if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref info, Marshal.SizeOf(typeof(ExtendedLimits))))
+            {
+                CloseHandle(job);
+                return IntPtr.Zero;
+            }
+            return job;
+        }
+
+        sealed class OperationState { public volatile bool Answered; }
+
         // The request goes to ops.ps1 as base64 on the command line, so nothing passes through
-        // files a normal user could touch. If Tune disconnects, the operation still finishes.
-        void RunOperation(string line, StreamWriter writer)
+        // files a normal user could touch. If Tune disconnects, the operation still finishes, unless it
+        // runs past its limit: then it is ended with everything it started, and answered "timedOut".
+        void RunOperation(string line, StreamWriter writer, int limitMs)
         {
             string ps = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
             string script = Path.Combine(dir, "ops.ps1");
@@ -183,25 +325,47 @@ namespace Tune
             psi.RedirectStandardOutput = true;
             psi.RedirectStandardError = true;
             psi.StandardOutputEncoding = Encoding.UTF8;
-            bool answered = false;
-            using (var proc = Process.Start(psi))
+            var state = new OperationState();
+            IntPtr job = NewKillJob();
+            try
             {
-                proc.ErrorDataReceived += delegate { };
-                proc.BeginErrorReadLine();
-                string l;
-                while ((l = proc.StandardOutput.ReadLine()) != null)
+                using (var proc = new Process())
                 {
-                    if (l.StartsWith("PROGRESS ")) Send(writer, "{\"progress\":" + l.Substring(9) + "}");
-                    else if (l.StartsWith("RESULT ")) { Send(writer, l.Substring(7)); answered = true; }
+                    proc.StartInfo = psi;
+                    proc.OutputDataReceived += delegate (object sender, DataReceivedEventArgs e)
+                    {
+                        string l = e.Data;
+                        if (l == null) return;
+                        if (l.StartsWith("PROGRESS ")) Send(writer, "{\"progress\":" + l.Substring(9) + "}");
+                        else if (l.StartsWith("RESULT ")) { Send(writer, l.Substring(7)); state.Answered = true; }
+                    };
+                    proc.ErrorDataReceived += delegate { };
+                    proc.Start();
+                    if (job != IntPtr.Zero) AssignProcessToJobObject(job, proc.Handle);
+                    proc.BeginOutputReadLine();
+                    proc.BeginErrorReadLine();
+                    if (!proc.WaitForExit(limitMs))
+                    {
+                        if (job != IntPtr.Zero) TerminateJobObject(job, 1);
+                        else try { proc.Kill(); } catch (Exception) { }
+                        proc.WaitForExit(5000);
+                        if (!state.Answered) Send(writer, Fail("the operation did not finish in time and was stopped", "timedOut"));
+                        return;
+                    }
+                    proc.WaitForExit(); // the rest of its output
                 }
-                proc.WaitForExit();
             }
-            if (!answered) Send(writer, Fail("operation ended without a result"));
+            finally { if (job != IntPtr.Zero) CloseHandle(job); }
+            if (!state.Answered) Send(writer, Fail("operation ended without a result", null));
         }
 
+        // Lines from the operation's output thread and from this one never interleave.
         static void Send(StreamWriter w, string json)
         {
-            try { w.WriteLine(json); } catch (IOException) { } catch (ObjectDisposedException) { }
+            lock (w)
+            {
+                try { w.WriteLine(json); } catch (IOException) { } catch (ObjectDisposedException) { } catch (InvalidOperationException) { }
+            }
         }
 
         static string Ok(object data)
@@ -209,9 +373,11 @@ namespace Tune
             return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "ok", true }, { "data", data } });
         }
 
-        static string Fail(string error)
+        static string Fail(string error, string code)
         {
-            return new JavaScriptSerializer().Serialize(new Dictionary<string, object> { { "ok", false }, { "error", error } });
+            var r = new Dictionary<string, object> { { "ok", false }, { "error", error } };
+            if (code != null) r["code"] = code;
+            return new JavaScriptSerializer().Serialize(r);
         }
 
         static string PawnIoVersion()
