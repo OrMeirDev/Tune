@@ -41,6 +41,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createRun } = require('./harness.cjs');
+const { recordPowerShell } = require('./ps-timing.cjs');
 
 const APP_DIR = path.join(__dirname, '..');
 const OUT_DIR = path.join(__dirname, 'output', path.basename(__filename, '.cjs'));
@@ -50,7 +51,9 @@ app.setPath('userData', path.join(work, 'profile'));
 app.on('window-all-closed', () => {});
 
 const run = createRun({ exit: (code) => app.exit(code) });
-const { check } = run;
+const { check, need } = run;
+// how long the app's PowerShell questions took (the identity read among them), printed after step 1
+const ps = recordPowerShell({ appDir: APP_DIR, now: realNow });
 let server = null;
 // Cleanup, last registered runs first: the server stops; its database and keys and Tune's licence
 // file go at once (retried while the server's process lets go of them); the rest of the folder is
@@ -81,7 +84,13 @@ async function post(port, route, body, admin) {
 }
 // the 6-digit code from the PoC's outbox (its stand-in for email), read with Node outside the app
 const activeDevice = () => execFileSync('node', ['-e', `const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync(process.argv[1]); process.stdout.write(db.prepare("SELECT id FROM devices WHERE state = 'active'").get().id);`, DB], { env: { ...process.env, NODE_NO_WARNINGS: '1' }, encoding: 'utf8' });
-const mailCode = (email) => execFileSync('node', ['-e', `const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync(process.argv[1]); const m = db.prepare('SELECT body FROM outbox WHERE to_email = ? ORDER BY id DESC').get(process.argv[2]); process.stdout.write(/\\b(\\d{6})\\b/.exec(m.body)[1]);`, DB, email], { env: { ...process.env, NODE_NO_WARNINGS: '1' }, encoding: 'utf8' });
+// (the code itself is never printed); no message, or none with a code, is said as such
+function mailCode(email) {
+  const out = execFileSync('node', ['-e', `const { DatabaseSync } = require('node:sqlite'); const db = new DatabaseSync(process.argv[1]); const rows = db.prepare('SELECT body FROM outbox WHERE to_email = ? ORDER BY id DESC').all(process.argv[2]); const m = rows[0] && /\\b(\\d{6})\\b/.exec(rows[0].body); process.stdout.write(JSON.stringify({ rows: rows.length, code: m ? m[1] : null }));`, DB, email], { env: { ...process.env, NODE_NO_WARNINGS: '1' }, encoding: 'utf8' });
+  const r = JSON.parse(out);
+  if (!r.code) throw new Error(`no sign-in code for ${email} in the licensing server's outbox (${r.rows} message(s) to that address${r.rows ? ', the latest without a 6-digit code' : ''})`);
+  return r.code;
+}
 
 run.guard(async () => {
   run.timeout(240000);
@@ -125,11 +134,20 @@ run.guard(async () => {
   const escape = async () => { win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' }); win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' }); await wait(300); };
   const click = (text) => js(`[...document.querySelectorAll('.license-setting > .header-actions button, .license-dialog button')].find((b) => b.textContent.trim() === ${JSON.stringify(text)})?.click()`);
 
-  // 1) before activation
+  // 1) before activation. Licensing is ready when the row shows a state (not "Loading…") and offers
+  //    activation; nothing after this runs until it is.
+  const settingsAt = ps.since();
   await lang('en');
-  let r = await until(row, (v) => v && /Not activated/.test(v.text));
-  check('1 the licence row says it is not activated, and that the server is a development one', /Not activated/.test(r?.text || '') && /development server/.test(r.text), r);
-  check('1 the storage is labelled for what it is', process.platform === 'win32' ? !/Test storage/.test(r.text) : /Test storage/.test(r.text), r?.text);
+  const offersActivation = (v) => !!v && /Not activated/.test(v.text) && v.buttons.some((b) => b.t === 'Activate or recover' && !b.disabled);
+  let r = await until(row, offersActivation);
+  const ready = offersActivation(r);
+  console.log(`TIMING ${JSON.stringify({ settingsOpenedAt: settingsAt, rowReadyAt: ready ? ps.since() : null, ...ps.summary() })}`);
+  need('1 licensing is ready: the row says it is not activated and offers activation', ready, r);
+  check('1 the row says the server is a development one', /development server/.test(r.text), r.text);
+  // the storage the main process actually uses (not what a row that isn't ready leaves out)
+  const st = await js(`window.tune.licenseStatus().then((s) => s && s.data && { available: s.data.available, storage: s.data.storage })`);
+  const win32 = process.platform === 'win32';
+  check('1 the storage is what this platform must use: DPAPI on Windows, the labelled test storage elsewhere', st?.available === true && st.storage === (win32 ? 'dpapi' : 'test') && (win32 ? !/Test storage/.test(r.text) : /Test storage/.test(r.text)), { st, text: r.text });
   const denied = await js(`window.tune.junkClean(['not-a-category'])`);
   check('1 a direct request for a gated action is refused without a licence', denied?.error === 'not entitled', denied);
   await shot('1-en-not-activated.png');
@@ -137,23 +155,23 @@ run.guard(async () => {
   // 2) owner verification and activation, by keyboard
   await click('Activate or recover');
   let m = await until(dialog, (v) => v && v.focus === 'lic-email');
-  check('2 the dialog opens with focus in the email field', m?.focus === 'lic-email', m);
+  need('2 the dialog opens with focus in the email field', m?.focus === 'lic-email', m);
   await type('Owner@Example.com'); await enter();
   m = await until(dialog, (v) => v && v.focus === 'lic-code');
-  check('2 a code is sent and focus moves to the code field', /code was sent/i.test(m?.text || '') && m.focus === 'lic-code', m);
+  need('2 a code is sent and focus moves to the code field', /code was sent/i.test(m?.text || '') && m.focus === 'lic-code', m);
   await type(mailCode('owner@example.com')); await enter();
   m = await until(dialog, (v) => v && v.focus === 'lic-serial');
-  check('2 the email is verified and focus moves to the Serial', /Verified: owner@example\.com/.test(m?.text || ''), m);
+  need('2 the email is verified and focus moves to the Serial', /Verified: owner@example\.com/.test(m?.text || '') && m.focus === 'lic-serial', m);
   await shot('2-en-serial.png');
   await type(serial.toLowerCase()); await enter();
   m = await until(dialog, (v) => v && /Tune is activated/.test(v.text));
-  check('2 activated', /Tune is activated/.test(m?.text || ''), m);
+  need('2 activated', /Tune is activated/.test(m?.text || ''), m);
   await shot('2-en-activated.png');
   await click('Done');
 
   // 3) the licence row
   r = await until(row, (v) => v && /Active\./.test(v.text));
-  check('3 active, with the package, the dates and the last check', /Active\./.test(r?.text || '') && /tune-pro/.test(r.text) && /Valid on this PC until/.test(r.text) && /License until/.test(r.text) && /Last successful check/.test(r.text), r?.text);
+  need('3 active, with the package, the dates and the last check', /Active\./.test(r?.text || '') && /tune-pro/.test(r.text) && /Valid on this PC until/.test(r.text) && /License until/.test(r.text) && /Last successful check/.test(r.text), r?.text);
   const passes = await js(`window.tune.junkClean(['not-a-category'])`);
   check('3 the gated request now passes the gate (and stops at the scan check: nothing runs)', passes?.error !== 'not entitled', passes);
   const nothingLeaks = await js(`window.tune.licenseStatus().then((s) => JSON.stringify(s))`);

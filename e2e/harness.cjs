@@ -17,6 +17,12 @@ function createRun({ exit, log = (line) => console.log(line) }) {
     log(`FAIL ${name}${err ? `: ${(err && err.stack) || err}` : ''}`);
     failures.push(name);
   };
+  // A check the steps after it depend on: when it fails, the run stops there (cleanup still runs and
+  // it exits non-zero) and says which steps were not run, instead of acting on a page that isn't ready.
+  const need = (name, cond, got) => {
+    if (check(name, cond, got)) return true;
+    throw Object.assign(new Error(`"${name}" failed, so the steps that depend on it were not run`), { unmet: true });
+  };
   // cleanups run last-registered first
   const onCleanup = (fn) => { cleanups.push(fn); };
 
@@ -35,7 +41,11 @@ function createRun({ exit, log = (line) => console.log(line) }) {
   // Runs the steps: the run passes only if they all complete and nothing failed.
   const guard = (steps) => Promise.resolve()
     .then(steps)
-    .then(() => end(true), (e) => { fail('unexpected error', e); return end(false); });
+    .then(() => end(true), (e) => {
+      if (e && e.unmet) log(`STOPPED ${e.message}`);
+      else fail('unexpected error', e);
+      return end(false);
+    });
 
   // A deadline for the whole run (it keeps the process alive until then; end() clears it).
   const timeout = (ms) => {
@@ -43,7 +53,7 @@ function createRun({ exit, log = (line) => console.log(line) }) {
     return timer;
   };
 
-  return { check, fail, onCleanup, guard, timeout, end, failures };
+  return { check, need, fail, onCleanup, guard, timeout, end, failures };
 }
 
 module.exports = { createRun };

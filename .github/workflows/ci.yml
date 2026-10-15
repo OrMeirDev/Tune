@@ -55,6 +55,9 @@ jobs:
       - run: npm ci --no-fund --no-audit
       - name: licensing (real DPAPI and machine id, against the PoC server)
         run: npm run e2e:licensing
+      - name: licensing at start-up (new profiles, timed; a slow and a failing identity read)
+        if: ${{ !cancelled() }}
+        run: npm run e2e:licensing-startup
       - name: locked IPC connection
         if: ${{ !cancelled() }}
         run: npm run e2e:ipc-probes

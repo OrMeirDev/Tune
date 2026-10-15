@@ -17,6 +17,7 @@
     "e2e:ipc-probes": "vite build && electron e2e/ipc-probes.cjs",
     "e2e:layout": "vite build && electron e2e/layout.cjs",
     "e2e:licensing": "vite build && electron e2e/licensing.cjs",
+    "e2e:licensing-startup": "vite build && node e2e/licensing-startup.cjs",
     "e2e:scan-failure": "vite build && electron e2e/scan-failure.cjs",
     "e2e:screenshots": "vite build && electron e2e/screenshots.cjs",
     "e2e:smoke": "vite build && electron e2e/smoke.cjs"

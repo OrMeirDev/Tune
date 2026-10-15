@@ -24,6 +24,7 @@ run.guard(async () => {
   run.check('two', true);
   if (MODE === 'throw-after') throw new Error('boom after two checks');
   if (MODE === 'fail') run.check('three', false);
+  if (MODE === 'unmet') { run.need('ready', false, { text: 'Loading' }); console.log('dependent step ran'); }
   if (MODE === 'hang') await new Promise(() => {});
 });
 `;
@@ -61,6 +62,17 @@ test('a failing check fails the run', () => {
   const r = runCase('fail');
   assert.equal(r.code, 1, r.out);
   assert.doesNotMatch(r.out, /ALL PASSED/);
+});
+
+test('a failed prerequisite stops the steps that depend on it, says so, and fails the run', () => {
+  const r = runCase('unmet');
+  assert.equal(r.code, 1, r.out);
+  assert.match(r.out, /FAIL ready \(\{"text":"Loading"\}\)/);
+  assert.match(r.out, /STOPPED "ready" failed, so the steps that depend on it were not run/);
+  assert.doesNotMatch(r.out, /dependent step ran/);
+  assert.doesNotMatch(r.out, /unexpected error/);
+  assert.match(r.out, /cleanup ran/);
+  assert.match(r.out, /1 FAILED \(stopped before the end\)/);
 });
 
 test('a run that never finishes fails at its deadline', () => {
