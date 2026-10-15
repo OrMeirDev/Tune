@@ -4,7 +4,8 @@
 //    policy, set for this check only)
 // 2) email -> 6-digit code -> Serial, by keyboard (focus moves to each field, Enter submits)
 // 3) the licence row: active, package, dates, last check; the gated request now passes the gate
-// 4) the server stops: "Check now" keeps the licence (signed expiry) and leaves the page usable;
+// 4) the server stops: "Check now" keeps the licence (signed expiry) and leaves the page usable; a
+//    second "Check now" right away is answered without a request (the minimum gap), with the wait;
 //    recovery without a server -> "isn't confirmed" (never "nothing changed") + Try again; server back
 //    -> the same request recovers the licence
 // 5) the owner releases this PC on the server: "Check now" shows it in the row (never "Active"), a
@@ -18,8 +19,8 @@
 // not prove DPAPI. Needs Node 22+ on PATH (for the PoC server). Nothing on the PC changes.
 // It passes only when every step ran and no check failed (e2e/harness.cjs): an unexpected error or a
 // timeout fails it, and the server and the throwaway folder are cleaned up either way.
-// The main process's clock, moved by hand in step 6 (Tune's licensing reads Date.now; set before
-// main.cjs is loaded). The renderer and the PoC server keep the real time.
+// The main process's clock, moved by hand in steps 5 and 6 (Tune's licensing reads Date.now; set
+// before main.cjs is loaded). The renderer and the PoC server keep the real time.
 const realNow = Date.now;
 let clockShift = 0;
 Date.now = () => realNow() + clockShift;
@@ -158,6 +159,11 @@ run.guard(async () => {
   r = await until(row, (v) => v && /Last attempt without a connection/.test(v.text));
   check('4 no connection: the licence stays active on its signed expiry; the failed attempt is shown', /Active\./.test(r?.text || '') && /Last attempt without a connection/.test(r.text), r?.text);
   check('4 the page stays usable (nothing left busy)', r?.buttons.every((b) => !b.disabled), r?.buttons);
+  const sent = r.text;
+  await click('Check now');
+  r = await until(row, (v) => v && /Try again in \d+ seconds/.test(v.text));
+  check('4 a second "Check now" within a minute: answered here with the wait, the licence as it was', /Try again in \d+ seconds/.test(r?.text || '') && /^Active\./m.test(r.text) && r.text.includes(sent.split('\n').find((l) => /Last attempt without a connection/.test(l))), r?.text);
+  check('4 the page stays usable after the deferral', r?.buttons.every((b) => !b.disabled), r?.buttons);
   await click('Activate or recover');
   await until(dialog, (v) => !!v);
   await click('Start over');
@@ -184,6 +190,8 @@ run.guard(async () => {
   const verified = await post(port, '/v1/owner/verify', { challengeId: challenge.challengeId, code: mailCode('owner@example.com') });
   const released = await post(port, '/v1/device/release', { ownerToken: verified.ownerToken, deviceId: activeDevice() });
   check('5 the server released this PC', released.result === 'ok', released);
+  // past the minimum gap since step 4's check, however long the steps between took
+  clockShift = 61_000;
   await click('Check now');
   r = await until(row, (v) => v && /released from the license/.test(v.text));
   check('5 "Check now" shows the release in the row, not "Active"', /released from the license/.test(r?.text || '') && !/^Active\./m.test(r.text), r?.text);
@@ -200,14 +208,14 @@ run.guard(async () => {
   check('5 the row is active again', /^Active\./m.test(r?.text || ''), r?.text);
 
   // 6) the clock alone changes the state: the row follows without a click
-  clockShift = -60 * 60_000;
+  clockShift = 61_000 - 60 * 60_000;
   powerMonitor.emit('resume');
   r = await until(row, (v) => v && /clock is set earlier/.test(v.text));
   check('6 the clock set back an hour: the open row says so, without a click', /clock is set earlier/.test(r?.text || '') && !/^Active\./m.test(r.text), r?.text);
   const deniedClock = await js(`window.tune.junkClean(['not-a-category'])`);
   check('6 while the clock is behind a gated request is refused', deniedClock?.error === 'not entitled', deniedClock);
   await shot('6-en-clock.png');
-  clockShift = 0;
+  clockShift = 61_000;
   powerMonitor.emit('resume');
   r = await until(row, (v) => v && /^Active\./m.test(v.text));
   check('6 the clock corrected: the row is active again, without a click', /^Active\./m.test(r?.text || '') && !/clock is set earlier/.test(r.text), r?.text);

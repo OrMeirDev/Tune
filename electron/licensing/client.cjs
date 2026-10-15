@@ -21,7 +21,10 @@
 //   outage, once the server answers again), one request at a time. Every renewal's result plans the
 //   next one on purpose: a success follows the new certificate (and the licence's own end), no answer
 //   is retried soon, an answer that didn't renew (a refusal, a certificate that doesn't verify) later,
-//   and never sooner than the server asked; timers and resume/unlock signals don't bypass that. A
+//   and never sooner than the server asked; timers and resume/unlock signals don't bypass that.
+//   Every refresh request, whoever asks for it (the background, "Check now", Try again, a request
+//   straight from the window), waits for a wait the server asked for and for a minute after the last
+//   one; until then it is answered here, without a request. A
 //   release, revocation or end the server confirmed is kept (protected) and stops renewal; only a
 //   recovery the server approves, with a certificate that verifies, makes this PC active again.
 // - The window is told when the licence changes without being asked: a background renewal, or a
@@ -42,6 +45,8 @@ const REFRESH_BEFORE_END_MS = 48 * HOUR;
 // after a successful check, the next one is never sooner than this (a certificate shorter than the
 // renewal lead, on the licence's last day, doesn't make renewal run back to back)
 const MIN_CHECK_GAP_MS = HOUR;
+// the least time between two refresh requests, whoever sends them
+const MIN_REQUEST_GAP_MS = MINUTE;
 // after a renewal that got no answer: try again after 1, 2, 4 ... minutes, at most an hour apart
 const RETRY_FIRST_MS = MINUTE;
 const RETRY_MAX_MS = HOUR;
@@ -91,7 +96,8 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
   let renewing = null; // the renewal in flight (a promise of its outcome)
   let retryDelay = 0;
   let retryAt = null; // after an unsuccessful renewal: not before this time
-  let lastAttemptAt = -Infinity; // the last renewal request (background or "Check now")
+  let lastAttemptAt = -Infinity; // when the last refresh request was sent (background or the person's)
+  let serverWaitUntil = -Infinity; // the end of a wait the server asked for (rate_limited)
   let shownState = null; // the licence state the window was last given (an answer or a change notice)
 
   function load() {
@@ -208,7 +214,7 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
       busy = false;
       // a check the person asked for ("Check now", or Try again) plans the next renewal like one in
       // the background, so a failure isn't followed by an immediate background request
-      if (ran && outcome && outcome.action === 'refresh') planAfter(outcome);
+      if (ran && outcome && outcome.action === 'refresh' && !outcome.deferred) planAfter(outcome);
       schedule();
     }
     return answer();
@@ -349,15 +355,27 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
     }, dev);
   });
 
-  // A check with the server, signed with this install's key (it renews the certificate).
+  // The earliest time a refresh request may be sent: a minute after the last one, and not before the
+  // end of a wait the server asked for. Separate from the regular cadence (dueAt): a check the person
+  // asks for never waits for the next scheduled renewal.
+  const refreshAllowedAt = () => Math.max(lastAttemptAt + MIN_REQUEST_GAP_MS, serverWaitUntil);
+
+  // A check with the server, signed with this install's key (it renews the certificate). The one
+  // place a refresh request is sent from, so the wait above holds for the background, "Check now",
+  // Try again and a request straight from the window alike. Before it ends the check is answered
+  // here with the time left: nothing is sent or recorded, the deadline doesn't move, and the stored
+  // licence and the person's pending request stay as they are.
   async function refreshNow({ background = false } = {}) {
     const lic = saved && saved.license;
     const key = saved && deviceKeyFrom(saved.device);
     if (!lic || !key) { outcome = { action: 'refresh', result: 'noLicense' }; return; }
+    const wait = refreshAllowedAt() - now();
+    if (wait > 0) { outcome = { action: 'refresh', result: 'rateLimited', retryAfterSeconds: Math.ceil(wait / 1000), deferred: true }; return; }
     const m = await ensureMachine();
     if (!m.ok) { outcome = { action: 'refresh', result: 'identityUnavailable' }; return; }
     const body = { licenseId: lic.licenseId, deviceId: lic.deviceId, machineId: m.machineId };
     const { ts, signature } = signRequest('refresh', body, key.privateKey, now());
+    lastAttemptAt = now();
     await send('refresh', 'refresh', { ...body, ts, signature }, { key, machineId: m.machineId }, { background });
   }
   const refresh = () => run('refresh', refreshNow);
@@ -404,35 +422,40 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
   // When the next renewal is due. After an unsuccessful one: its retry time. Otherwise 12 hours after
   // the last successful check, or sooner to renew ahead of the certificate's end: 2 days before it, but
   // not before half the time to it has passed (a short certificate). A certificate that already runs to
-  // the licence's own end can't be extended by renewing, so the next look is at that end (the server
-  // then says whether the licence ended or was extended). Never sooner than an hour after a successful
-  // check, or a minute after any request.
+  // the licence's own end can't be extended by renewing, so it isn't renewed ahead of that end: the next
+  // look is 12 hours after the last check, or at that end if it comes sooner (the server then says
+  // whether the licence ended or was extended). Never sooner than an hour after a successful check, nor
+  // before a refresh request may be sent at all (refreshAllowedAt).
   function dueAt(j) {
-    if (retryAt != null) return Math.max(retryAt, lastAttemptAt + RETRY_FIRST_MS);
+    const allowed = refreshAllowedAt();
+    if (retryAt != null) return Math.max(retryAt, allowed);
     const lic = saved.license;
     const last = num(lic.lastCheckAt);
-    if (last === null) return Math.max(now(), lastAttemptAt + RETRY_FIRST_MS);
+    if (last === null) return Math.max(now(), allowed);
     let due = last + REFRESH_AFTER_MS;
     const end = j.payload && Number.isFinite(j.payload.expiresAt) ? j.payload.expiresAt : null;
     const licenseEnd = num(lic.licenseExpiresAt);
     if (end !== null && licenseEnd !== null && end >= licenseEnd) due = Math.min(due, licenseEnd);
     else if (end !== null) due = Math.min(due, Math.max(end - REFRESH_BEFORE_END_MS, last + (end - last) / 2));
-    return Math.max(due, last + MIN_CHECK_GAP_MS, lastAttemptAt + RETRY_FIRST_MS);
+    return Math.max(due, last + MIN_CHECK_GAP_MS, allowed);
   }
 
-  // After a renewal request (in the background or "Check now"): when the next may be sent. A new
-  // certificate or an end the server confirmed clears the retry (dueAt follows the certificate;
-  // schedule stops on an end). Anything else is tried again later: soon after no answer, later after
-  // an answer that didn't renew, and never sooner than the server asked.
+  // After a renewal request (in the background or the person's): when the next background one is
+  // due. A new certificate or an end the server confirmed clears the retry (dueAt follows the
+  // certificate; schedule stops on an end). Anything else is tried again later: soon after no answer,
+  // later after an answer that didn't renew, and never sooner than the server asked (that wait also
+  // holds for the person's own checks: refreshAllowedAt). Not for a check deferred here (nothing was
+  // sent).
   function planAfter(o) {
     const r = o && o.result;
-    lastAttemptAt = now();
+    const at = now();
     if (!r || RENEWED.has(r) || ENDED.has(r) || r === 'noLicense') { retryDelay = 0; retryAt = null; return; }
     const quick = NO_ANSWER.has(r) || r === 'rateLimited';
     retryDelay = Math.min(Math.max(retryDelay * 2, quick ? RETRY_FIRST_MS : REFUSED_FIRST_MS), quick ? RETRY_MAX_MS : REFUSED_MAX_MS);
     const asked = r === 'rateLimited' && Number.isSafeInteger(o.retryAfterSeconds) && o.retryAfterSeconds > 0
       ? Math.min(o.retryAfterSeconds * 1000, SERVER_DELAY_MAX_MS) : 0;
-    retryAt = lastAttemptAt + Math.max(retryDelay, asked);
+    if (asked) serverWaitUntil = at + asked;
+    retryAt = at + Math.max(retryDelay, asked);
   }
 
   // Plan the next look: none without a licence, or after an end the server confirmed. Otherwise the
@@ -491,6 +514,7 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
     })();
     let result = null;
     try { result = await renewing; } catch { result = { action: 'refresh', result: 'failed' }; } finally { renewing = null; }
+    if (result && result.deferred) return;
     planAfter(result);
     notify(true);
   }
