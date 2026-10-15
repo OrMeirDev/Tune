@@ -9,12 +9,20 @@
 //    -> the same request recovers the licence
 // 5) the owner releases this PC on the server: "Check now" shows it in the row (never "Active"), a
 //    gated request is refused, and recovery brings the licence back
-// 6) the same in Hebrew (right to left), Escape closes the dialog
+// 6) the clock alone changes the licence's state (set back, then corrected; Electron's own resume
+//    event, no click): the open Settings row follows each time, and a gated request is refused while
+//    the clock is behind
+// 7) the same in Hebrew (right to left), Escape closes the dialog
 // On Windows the profile is protected with DPAPI and the machine id is the PC's own. Elsewhere this
 // uses the app's test-only storage and machine id (development builds only): a run off Windows does
 // not prove DPAPI. Needs Node 22+ on PATH (for the PoC server). Nothing on the PC changes.
 // It passes only when every step ran and no check failed (e2e/harness.cjs): an unexpected error or a
 // timeout fails it, and the server and the throwaway folder are cleaned up either way.
+// The main process's clock, moved by hand in step 6 (Tune's licensing reads Date.now; set before
+// main.cjs is loaded). The renderer and the PoC server keep the real time.
+const realNow = Date.now;
+let clockShift = 0;
+Date.now = () => realNow() + clockShift;
 const net = require('net');
 const { EventEmitter } = require('events');
 const realConnect = net.connect;
@@ -25,7 +33,7 @@ net.connect = (...a) => {
   setImmediate(() => fake.emit('error', Object.assign(new Error('blocked in test'), { code: 'ECONNREFUSED' })));
   return fake;
 };
-const { app, BrowserWindow, screen } = require('electron');
+const { app, BrowserWindow, screen, powerMonitor } = require('electron');
 const { spawn, execFileSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -191,22 +199,35 @@ run.guard(async () => {
   r = await until(row, (v) => v && /^Active\./m.test(v.text));
   check('5 the row is active again', /^Active\./m.test(r?.text || ''), r?.text);
 
-  // 6) Hebrew, right to left
+  // 6) the clock alone changes the state: the row follows without a click
+  clockShift = -60 * 60_000;
+  powerMonitor.emit('resume');
+  r = await until(row, (v) => v && /clock is set earlier/.test(v.text));
+  check('6 the clock set back an hour: the open row says so, without a click', /clock is set earlier/.test(r?.text || '') && !/^Active\./m.test(r.text), r?.text);
+  const deniedClock = await js(`window.tune.junkClean(['not-a-category'])`);
+  check('6 while the clock is behind a gated request is refused', deniedClock?.error === 'not entitled', deniedClock);
+  await shot('6-en-clock.png');
+  clockShift = 0;
+  powerMonitor.emit('resume');
+  r = await until(row, (v) => v && /^Active\./m.test(v.text));
+  check('6 the clock corrected: the row is active again, without a click', /^Active\./m.test(r?.text || '') && !/clock is set earlier/.test(r.text), r?.text);
+
+  // 7) Hebrew, right to left
   await lang('he');
   r = await until(row, (v) => v && /פעיל\./.test(v.text));
-  check('6 Hebrew: the licence row', /פעיל\./.test(r?.text || '') && /tune-pro/.test(r.text), r?.text);
+  check('7 Hebrew: the licence row', /פעיל\./.test(r?.text || '') && /tune-pro/.test(r.text), r?.text);
   await js(`[...document.querySelectorAll('.license-setting > .header-actions button')].at(-1).click()`);
   m = await until(dialog, (v) => !!v);
-  check('6 a new visit to the dialog does not repeat the earlier success', !/חזר למחשב הזה/.test(m?.text || '') && /התחל מחדש/.test(m.text), m?.text);
+  check('7 a new visit to the dialog does not repeat the earlier success', !/חזר למחשב הזה/.test(m?.text || '') && /התחל מחדש/.test(m.text), m?.text);
   await click('התחל מחדש');
   m = await until(dialog, (v) => v && v.focus === 'lic-email');
-  check('6 Hebrew: the dialog is right to left and starts in the email field', m?.dir === 'rtl' && /הפעלת Tune/.test(m.text) && m.focus === 'lic-email', m);
+  check('7 Hebrew: the dialog is right to left and starts in the email field', m?.dir === 'rtl' && /הפעלת Tune/.test(m.text) && m.focus === 'lic-email', m);
   const overlap = await js(`(() => { const els = [...document.querySelectorAll('.license-dialog label, .license-dialog button, .license-dialog input, .license-dialog .dmeta')].map((e) => e.getBoundingClientRect()); const box = document.querySelector('.license-dialog').getBoundingClientRect(); return els.filter((r) => r.width && (r.left < box.left - 1 || r.right > box.right + 1)).length; })()`);
-  check('6 Hebrew: nothing sticks out of the dialog', overlap === 0, overlap);
-  await shot('6-he-dialog.png');
+  check('7 Hebrew: nothing sticks out of the dialog', overlap === 0, overlap);
+  await shot('7-he-dialog.png');
   await escape();
-  check('6 Escape closes the dialog', !(await dialog()));
-  await shot('6-he-settings.png');
+  check('7 Escape closes the dialog', !(await dialog()));
+  await shot('7-he-settings.png');
 
   check('no renderer errors', errors.length === 0, errors);
 });
