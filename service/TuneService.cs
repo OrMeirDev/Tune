@@ -84,7 +84,12 @@ namespace Tune
                     if (args[i] == "--pipe") PipeName = args[i + 1];
                     if (args[i] == "--op-seconds") consoleOperationSeconds = Math.Max(1, int.Parse(args[i + 1]));
 #if TUNE_FAULTS
-                    if (args[i] == "--fault") fault = args[i + 1];
+                    if (args[i] == "--fault")
+                    {
+                        string[] f = args[i + 1].Split(':');
+                        fault = f[0];
+                        if (f.Length > 1) faultTimes = int.Parse(f[1]);
+                    }
 #endif
                 }
                 var s = new TuneService();
@@ -290,6 +295,8 @@ namespace Tune
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool QueryInformationJobObject(IntPtr job, int infoClass, out BasicAccounting info, int length, IntPtr returnLength);
         [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool QueryInformationJobObject(IntPtr job, int infoClass, IntPtr info, int length, IntPtr returnLength);
+        [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool TerminateJobObject(IntPtr job, uint exitCode);
@@ -346,6 +353,7 @@ namespace Tune
         struct SecurityAttributes { public int Length; public IntPtr Descriptor; public bool Inherit; }
 
         const int JobObjectBasicAccountingInformation = 1;
+        const int JobObjectBasicProcessIdList = 3;
         const int JobObjectExtendedLimitInformation = 9;
         const uint KillOnJobClose = 0x2000;
         const uint CreateSuspended = 0x4, CreateNoWindow = 0x08000000;
@@ -360,10 +368,19 @@ namespace Tune
 #if TUNE_FAULTS
         // Test builds only (scripts/ci/service-containment-check.ps1 compiles one with /define:TUNE_FAULTS;
         // the shipped service has none of this): one native step made to fail, or the assignment
-        // delayed, named by --fault on the console command line. A step made to fail reports
-        // ERROR_INTERNAL_ERROR (1359), since Windows was never asked.
+        // delayed, named by --fault on the console command line ("name", or "name:N" to fail only its
+        // first N times). A step made to fail reports ERROR_INTERNAL_ERROR (1359), since Windows was
+        // never asked.
         static string fault;
-        static bool Fault(string step) { return fault == step; }
+        static int faultTimes = -1;
+        static bool Fault(string step)
+        {
+            if (fault != step) return false;
+            if (faultTimes < 0) return true;
+            if (faultTimes == 0) return false;
+            faultTimes--;
+            return true;
+        }
         static void FaultDelay(string step) { if (fault == step) Thread.Sleep(3000); }
         static int ErrorOf(string step) { return fault == step ? 1359 : Marshal.GetLastWin32Error(); }
 #else
@@ -459,6 +476,30 @@ namespace Tune
             return (int)a.ActiveProcesses;
         }
 
+        // The ids of the processes still in the job (for the answer when an end isn't confirmed), or "?".
+        static string JobProcessIds(IntPtr job)
+        {
+            const int most = 64;
+            int size = 8 + most * IntPtr.Size;
+            IntPtr buf = Marshal.AllocHGlobal(size);
+            try
+            {
+                // ERROR_MORE_DATA (234) still fills in the first ones
+                if (!QueryInformationJobObject(job, JobObjectBasicProcessIdList, buf, size, IntPtr.Zero) && Marshal.GetLastWin32Error() != 234) return "?";
+                int listed = Math.Min(Marshal.ReadInt32(buf, 4), most);
+                var ids = new List<string>();
+                for (int i = 0; i < listed; i++) ids.Add(Marshal.ReadIntPtr(buf, 8 + i * IntPtr.Size).ToInt64().ToString());
+                return ids.Count == 0 ? "none" : string.Join(", ", ids.ToArray());
+            }
+            finally { Marshal.FreeHGlobal(buf); }
+        }
+
+        static string StillRunning(Contained c)
+        {
+            return "Windows error " + c.Error + "; " + (Exited(c.Process) ? "" : "its first process still runs; ") +
+                "processes still in its job: " + (c.InJob ? JobProcessIds(c.Job) : "not in a job");
+        }
+
         static bool Exited(IntPtr process)
         {
             return process == IntPtr.Zero || WaitForSingleObject(process, 0) == WaitObject0;
@@ -499,7 +540,7 @@ namespace Tune
                 if (EndAll(unconfirmed[i])) { unconfirmed[i].Close(); unconfirmed.RemoveAt(i); }
             }
             return unconfirmed.Count == 0 ? null
-                : "an earlier change has not been confirmed as stopped (Windows error " + unconfirmed[0].Error + "); no other change starts until it is";
+                : "an earlier change has not been confirmed as stopped (" + StillRunning(unconfirmed[0]) + "); no other change starts until it is";
         }
 
         // Reads the operation's output: progress lines and its result go to Tune as they come, until the
@@ -563,7 +604,7 @@ namespace Tune
                 reader.Join(OutputGraceMs);
                 if (finished) answer = Fail("operation ended without a result", null);
                 else if (ended) answer = Fail("the operation did not finish in time and was stopped", "timedOut");
-                else answer = Fail("the operation did not finish in time; Windows has not confirmed that it stopped (error " + c.Error +
+                else answer = Fail("the operation did not finish in time; Windows has not confirmed that it stopped (" + StillRunning(c) +
                     "), so no other change starts until it has", "timedOut", false);
             }
             catch (Exception e)

@@ -7,8 +7,9 @@
 #   change is refused ("containmentFailed"), the operation never ran, and no process of it is left
 # - the job assignment delayed 3 s: the process waits suspended, so the child it starts at once is in
 #   the job and ends with it at the limit
-# - a termination Windows refuses: "timedOut" with stopped false, the processes really still run, the
-#   next change hears "busy"; once they are gone the next change runs again
+# - a termination Windows refuses twice: "timedOut" with stopped false, naming what is still in the job;
+#   the processes really still run; the next change hears "busy"; at the one after, the service ends
+#   the job, confirms it and runs the change
 $ErrorActionPreference = 'Stop'
 if ($env:CI -ne 'true' -or $env:GITHUB_ACTIONS -ne 'true') { throw 'runs only on a disposable CI runner' }
 
@@ -47,7 +48,7 @@ function Tree([int[]]$roots) {
 function Names([int[]]$ids) { (@(@($ids) | Where-Object { $null -ne $_ } | ForEach-Object { $p = Get-Process -Id $_ -ErrorAction SilentlyContinue; if ($p) { "$($p.ProcessName)($_)" } }) -join ', ') }
 function Probe([string]$mode, [string]$pipe) { (node scripts/ci/service-probe.cjs $mode $pipe) | ConvertFrom-Json }
 function Start-Copy([string]$fault) {
-  $pipe = "TuneFault-$fault"
+  $pipe = 'TuneFault-' + ($fault -replace '[^A-Za-z0-9-]', '')
   $p = Start-Process -FilePath (Join-Path $dir 'TuneService.exe') -ArgumentList '--console', '--pipe', $pipe, '--op-seconds', '5', '--fault', $fault -WindowStyle Hidden -PassThru
   $end = (Get-Date).AddSeconds(30)
   while ((Get-Date) -lt $end -and -not (Test-Path -LiteralPath "\\.\pipe\$pipe")) { Start-Sleep -Milliseconds 200 }
@@ -85,26 +86,25 @@ try {
   Check 'delayed assignment: no process of it is left' ((OpsShells).Count -eq 0) ((OpsShells) -join ',')
 } finally { Stop-Copy $c }
 
-# 3) Windows refuses to end it: not claimed as stopped, and no other change starts until it is gone
-$c = Start-Copy 'terminate'
+# 3) Windows refuses to end it, twice (--fault terminate:2): not claimed as stopped, and no other change
+#    starts; at the next request the service ends the job itself, confirms it, and runs the change
+$c = Start-Copy 'terminate:2'
 try {
   $r = Probe 'change' $c.pipe
   $kids = Children
   $shells = OpsShells
   Check 'refused termination: answered timedOut with stopped false' ($r.code -eq 'timedOut' -and $r.stopped -eq $false) ($r | ConvertTo-Json -Compress)
   Check 'refused termination: its processes really still run (nothing was claimed)' ((Alive $kids).Count -eq 1 -and $shells.Count -eq 1) "children $((Alive $kids).Count), shells $($shells.Count)"
+  $inJob = @(([regex]::Match([string]$r.error, 'processes still in its job: ([\d, ]+)')).Groups[1].Value -split ',\s*' | Where-Object { $_ } | ForEach-Object { [int]$_ })
+  Check 'refused termination: the answer names the processes still in its job' ($inJob.Count -ge 2 -and $inJob -contains $shells[0]) "$($inJob -join ',') = $(Names $inJob)"
   $b = Probe 'change' $c.pipe
   Check 'refused termination: the next change hears busy, and does not run' ($b.code -eq 'busy' -and $b.error -match 'not been confirmed' -and (Runs) -eq 1) ($b | ConvertTo-Json -Compress)
   $v = Probe 'version' $c.pipe
   Check 'refused termination: read-only requests are still answered' ($v.ok -and $v.ms -lt 3000) ($v | ConvertTo-Json -Compress)
-  # what Windows refused to end is ended here instead: every process of the operation, console hosts too
-  $tree = Tree ($shells + $kids)
-  foreach ($id in $tree) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
-  $end = (Get-Date).AddSeconds(15)
-  while ((Get-Date) -lt $end -and (Alive $tree).Count) { Start-Sleep -Milliseconds 200 }
-  Check 'refused termination: the test ended every process of it itself' ((Alive $tree).Count -eq 0) (Names (Alive $tree))
   $again = Probe 'change' $c.pipe
-  Check 'once its processes are gone, the next change runs again' ((Runs) -eq 2 -and $again.code -eq 'timedOut') "$($again | ConvertTo-Json -Compress) left: $(Names (Alive $tree))"
+  Start-Sleep -Milliseconds 500
+  Check 'once Windows ends it, its end is confirmed and the next change runs (and is stopped at its limit)' ((Runs) -eq 2 -and $again.code -eq 'timedOut' -and $again.stopped -ne $false) ($again | ConvertTo-Json -Compress)
+  Check 'and nothing of either is left' ((Alive ($inJob + (Children))).Count -eq 0 -and (OpsShells).Count -eq 0) (Names (Alive ($inJob + (Children))))
 } finally { Stop-Copy $c }
 
 if ($script:failures) { Write-Output "$script:failures FAILED"; exit 1 }
