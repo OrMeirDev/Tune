@@ -20,6 +20,7 @@ net.connect = (...a) => {
   return fake;
 };
 const { app, BrowserWindow } = require('electron');
+const { spawn } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
@@ -37,7 +38,9 @@ app.on('window-all-closed', () => {});
 
 const run = createRun({ exit: (code) => app.exit(code) });
 const { check, need } = run;
-run.onCleanup(() => fs.rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }));
+// the app's Chromium profile is held open until the app exits (on Windows it can't be deleted yet), so a
+// small process removes the folder after the app has exited
+run.onCleanup(() => spawn('node', ['-e', 'setTimeout(() => require("fs").rmSync(process.argv[1], { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }), 3000)', work], { detached: true, stdio: 'ignore', windowsHide: true }).unref());
 
 const win32 = process.platform === 'win32';
 // a GUID-shaped stand-in where there is no PowerShell (the real one is never printed)

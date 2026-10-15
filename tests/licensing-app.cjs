@@ -67,12 +67,13 @@ async function server(t, opts = {}) {
 
 // Tune on one PC: a profile folder, its machine id, its protected storage (and, when given, timers
 // and a change listener).
-function tune(t, srv, { machine = pc('pc-a'), dir, crypt = fakeCrypt(), fetch = globalThis.fetch, timeoutMs = 3000, now = srv.now, timers, onChange } = {}) {
+// `identity` stands in for the identity read (default: answers at once with this PC's machine id).
+function tune(t, srv, { machine = pc('pc-a'), dir, crypt = fakeCrypt(), fetch = globalThis.fetch, timeoutMs = 3000, now = srv.now, timers, onChange, identity } = {}) {
   const profile = dir || fs.mkdtempSync(path.join(os.tmpdir(), 'tune-profile-'));
   if (!dir) t.after(() => fs.rmSync(profile, { recursive: true, force: true }));
   const config = { url: srv.url, publicKey: srv.publicKey, problem: null, development: true };
   const store = createProtectedStore({ file: path.join(profile, 'license.bin'), crypt });
-  const client = createLicensingClient({ config, api: createApi({ baseUrl: srv.url, fetch, timeoutMs }), store, machineId: async () => ({ ok: true, machineId: machine.machineId }), now, timers, onChange });
+  const client = createLicensingClient({ config, api: createApi({ baseUrl: srv.url, fetch, timeoutMs }), store, machineId: identity || (async () => ({ ok: true, machineId: machine.machineId })), now, timers, onChange });
   t.after(() => client.dispose && client.dispose());
   return { client, profile, crypt, machine, file: path.join(profile, 'license.bin') };
 }

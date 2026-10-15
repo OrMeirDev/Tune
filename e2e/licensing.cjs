@@ -141,8 +141,14 @@ run.guard(async () => {
   const offersActivation = (v) => !!v && /Not activated/.test(v.text) && v.buttons.some((b) => b.t === 'Activate or recover' && !b.disabled);
   let r = await until(row, offersActivation);
   const ready = offersActivation(r);
-  console.log(`TIMING ${JSON.stringify({ settingsOpenedAt: settingsAt, rowReadyAt: ready ? ps.since() : null, ...ps.summary() })}`);
+  const rowReadyAt = ready ? ps.since() : null;
+  // activation needs this PC's identity (on Windows a PowerShell and WMI read, slow on a busy runner):
+  // wait for that read to end (it is ended after 30 s) rather than racing it
+  const identity = () => js(`window.tune.licenseStatus().then((s) => s && s.data && s.data.identity)`);
+  const id = await until(identity, (v) => v !== 'reading' && v !== 'notRead', 45000);
+  console.log(`TIMING ${JSON.stringify({ settingsOpenedAt: settingsAt, rowReadyAt, identityKnownAt: id === 'ok' ? ps.since() : null, ...ps.summary() })}`);
   need('1 licensing is ready: the row says it is not activated and offers activation', ready, r);
+  need("1 this PC's identity has been read (activation needs it)", id === 'ok', id);
   check('1 the row says the server is a development one', /development server/.test(r.text), r.text);
   // the storage the main process actually uses (not what a row that isn't ready leaves out)
   const st = await js(`window.tune.licenseStatus().then((s) => s && s.data && { available: s.data.available, storage: s.data.storage })`);

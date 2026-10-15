@@ -29,6 +29,12 @@
 //   recovery the server approves, with a certificate that verifies, makes this PC active again.
 // - The window is told when the licence changes without being asked: a background renewal, or a
 //   state the clock alone changed (set back, corrected, a certificate running out), once each.
+// - This PC's identity (on Windows a PowerShell and WMI query, which can take many seconds while
+//   Tune's own start-up scans run) is read once, by one read everyone who asks shares. The status
+//   waits for it only when a licence is stored (the licence can't be judged without it), and then at
+//   most IDENTITY_WAIT_MS; without a stored licence it can't change what the window shows, so the
+//   status answers at once and the read goes on for activation. A read that fails or doesn't answer
+//   is reported as such (identity: 'unavailable'), never as loading, and is tried again when needed.
 const crypto = require('node:crypto');
 const { normalize } = require('./serial.cjs');
 const { signRequest } = require('./device-keys.cjs');
@@ -67,6 +73,9 @@ const NO_RENEWAL = new Set(['none', 'clock', 'otherMachine', 'invalid', 'unsuppo
 const RENEWED = new Set(['refreshed', 'storageFailed']);
 const ENDED = new Set(['deviceReleased', 'licenseExpired', 'licenseRevoked']);
 const NO_ANSWER = new Set(['unavailable', 'failed', 'identityUnavailable']);
+// the longest the status waits for this PC's identity (the read itself is ended after 30 s); past it
+// the identity counts as unavailable for that answer, while the same read may still finish
+const IDENTITY_WAIT_MS = 40_000;
 
 // Timers that never keep the process alive (Tune quits when its window closes).
 const realTimers = {
@@ -83,7 +92,9 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
   let loaded = false;
   let saved = null; // the decrypted file: { v: 1, device, license, lastSeenAt }
   let storage = 'ok'; // 'ok' | 'unavailable' | 'unreadable' | 'failed'
-  let machine = null; // { ok, machineId }
+  let machine = null; // the last finished identity read: { ok, machineId } or { ok: false }
+  let machineRead = null; // the identity read in flight, shared by everyone who asks
+  let identityLate = false; // an answer went out without the identity; tell the window when it comes
   let flow = { email: null, challengeId: null, ownerToken: null, ownerExpiresAt: null, choices: null };
   let pending = null; // the request to send again after no answer
   let outcome = null; // what the last action came to
@@ -109,12 +120,31 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
     storage = r.reason === 'none' ? (store.kind() === 'unavailable' ? 'unavailable' : 'ok') : r.reason;
   }
 
-  async function ensureMachine() {
-    if (!machine || !machine.ok) {
-      try { machine = await machineId(); } catch { machine = { ok: false }; }
+  // This PC's identity: once known it is kept; while it is being read, everyone waits for the same
+  // read; after a failure the next caller reads again.
+  function ensureMachine() {
+    if (machine && machine.ok) return Promise.resolve(machine);
+    if (!machineRead) {
+      machineRead = (async () => {
+        let m;
+        try { m = await machineId(); } catch { m = null; }
+        machine = m && m.ok && m.machineId ? m : { ok: false };
+        machineRead = null;
+        if (identityLate && !disposed) { identityLate = false; try { notify(); } catch { /* the next look tells it */ } }
+        return machine;
+      })();
     }
-    return machine;
+    return machineRead;
   }
+  // The identity, waited for at most `ms` (then treated as unavailable for this answer).
+  function machineWithin(ms) {
+    const read = ensureMachine();
+    if (machine && machine.ok) return read;
+    let h = null;
+    const late = new Promise((r) => { h = timers.set(() => { identityLate = true; r({ ok: false, late: true }); }, ms); });
+    return Promise.race([read, late]).finally(() => timers.clear(h));
+  }
+  const identityState = () => (machine && machine.ok ? 'ok' : machineRead ? 'reading' : machine ? 'unavailable' : 'notRead');
 
   const write = (next) => {
     const w = store.write(next);
@@ -177,8 +207,10 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
       problem: config.problem || null,
       development: !!config.development,
       storage: storage === 'ok' ? store.kind() : storage,
+      identity: identityState(),
       license: {
-        state: j.state,
+        // a stored licence judged without this PC's identity: said as such, not as a damaged licence
+        state: j.state === 'invalid' && j.reason === 'unverifiable' && lic && !(machine && machine.ok) ? 'identityUnavailable' : j.state,
         planId: p ? p.planId : lic ? lic.planId || null : null,
         features: p ? p.features : [],
         certificateExpiresAt: p ? p.expiresAt : null,
@@ -404,8 +436,11 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
   async function status() {
     load();
     // the machine id (a PowerShell query on Windows) is read only when it can matter: licensing is
-    // configured, or a licence is stored; with the shipped defaults nothing runs
-    if (api || (saved && saved.license)) await ensureMachine();
+    // configured, or a licence is stored; with the shipped defaults nothing runs. Only a stored
+    // licence is judged by it, so only then does the answer wait (bounded); otherwise the read is
+    // started once, for activation, and the answer comes at once.
+    if (saved && saved.license) await machineWithin(IDENTITY_WAIT_MS);
+    else if (api && !machine && !machineRead) ensureMachine().catch(() => {});
     touchClock();
     return answer();
   }
@@ -549,4 +584,4 @@ function createLicensingClient({ config, api, store, machineId, now = Date.now, 
   return { init, status, startOwner, confirmOwner, activate, recover, refresh, retry, reset, current, wake, dispose };
 }
 
-module.exports = { createLicensingClient, realTimers, REFRESH_AFTER_MS, REFRESH_BEFORE_END_MS, RETRY_MAX_MS, REFUSED_MAX_MS, LOOK_EVERY_MS };
+module.exports = { createLicensingClient, realTimers, IDENTITY_WAIT_MS, REFRESH_AFTER_MS, REFRESH_BEFORE_END_MS, RETRY_MAX_MS, REFUSED_MAX_MS, LOOK_EVERY_MS };
