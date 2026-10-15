@@ -41,7 +41,9 @@ const buildInfo = (v) => {
   return `namespace Tune { static class BuildInfo { public const string Version = "${v}"; } }\n`;
 };
 
-const powershell = (command) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', env: process.env }).trim();
+// Windows PowerShell with its own modules only (started from PowerShell 7 it would inherit 7's module
+// path, where Set-AuthenticodeSignature's module doesn't load).
+const powershell = (command) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `$env:PSModulePath=[IO.Path]::Combine($PSHOME,'Modules'); ${command}`], { encoding: 'utf8', env: process.env }).trim();
 
 // The thumbprint of the certificate a file is signed with, or null.
 const signerOf = (file) => powershell(`$s = Get-AuthenticodeSignature -LiteralPath '${file.replace(/'/g, "''")}'; if ($s.SignerCertificate) { $s.SignerCertificate.Thumbprint }`) || null;

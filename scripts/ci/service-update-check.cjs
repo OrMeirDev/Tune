@@ -17,7 +17,8 @@ const check = (name, cond, got) => {
   console.log(`${cond ? 'PASS' : 'FAIL'} ${name}${got !== undefined ? ` (${JSON.stringify(got).slice(0, 400)})` : ''}`);
   if (!cond) failures.push(name);
 };
-const ps = (cmd) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd], { encoding: 'utf8' }).trim();
+// Windows PowerShell with its own modules only (this runs from PowerShell 7, whose module path it would inherit)
+const ps = (cmd) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `$env:PSModulePath=[IO.Path]::Combine($PSHOME,'Modules'); ${cmd}`], { encoding: 'utf8' }).trim();
 const binPath = () => ps("(Get-CimInstance Win32_Service -Filter \"Name='TuneService'\").PathName");
 const folders = () => ps("Get-ChildItem -LiteralPath (Join-Path $env:ProgramFiles 'Tune Service') -Directory | ForEach-Object Name").split(/\r?\n/).filter(Boolean).sort();
 const version = () => JSON.parse(execFileSync(process.execPath, [path.join(__dirname, 'pipe-call.cjs'), 'version'], { encoding: 'utf8' }).trim());

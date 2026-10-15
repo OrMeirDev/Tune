@@ -47,7 +47,7 @@ function packedFiles() {
   if (signer) {
     const setup = fs.readdirSync(path.join(root, 'release')).find((n) => /^Tune-Setup-.*\.exe$/.test(n));
     for (const f of [path.join(unpacked, 'Tune.exe'), path.join(service, 'TuneService.exe'), path.join(root, 'release', setup)]) {
-      const s = execFileSync('powershell.exe', ['-NoProfile', '-Command', `$s = Get-AuthenticodeSignature -LiteralPath '${f}'; "$($s.Status)|$($s.SignerCertificate.Thumbprint)"`], { encoding: 'utf8' }).trim();
+      const s = execFileSync('powershell.exe', ['-NoProfile', '-Command', `$env:PSModulePath=[IO.Path]::Combine($PSHOME,'Modules'); $s = Get-AuthenticodeSignature -LiteralPath '${f}'; "$($s.Status)|$($s.SignerCertificate.Thumbprint)"`], { encoding: 'utf8' }).trim();
       check(`signed: ${path.basename(f)}`, s === `Valid|${signer}`, s);
     }
     check('the manifest names the signer', manifest.signer === signer, manifest.signer);
