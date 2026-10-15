@@ -102,7 +102,10 @@ test('the service: an operation runs only once it is contained, and its end is c
   assert.ok(at(seam, 'static string fault;') < at(seam, '#else') && at(seam, '#else') < at(seam, 'static bool Fault(string step) { return false; }') && at(seam, '#endif'));
   assert.equal((cs.match(/static string fault;/g) || []).length, 1);
   const start = cs.slice(cs.indexOf('internal static void Start('), cs.indexOf('public TuneService()'));
-  assert.match(start, /#if TUNE_FAULTS\s+if \(args\[i\] == "--fault"\) fault = args\[i \+ 1\];\s+#endif/);
+  const faultArg = start.slice(start.indexOf('#if TUNE_FAULTS'), start.indexOf('#endif'));
+  assert.match(faultArg, /if \(args\[i\] == "--fault"\)/, '--fault is parsed only inside TUNE_FAULTS');
+  assert.equal((start.match(/"--fault"/g) || []).length, 1);
+  assert.ok(start.indexOf('#if TUNE_FAULTS') > start.indexOf('args[0] == "--console"') && start.indexOf('#endif') < start.indexOf('Run(new TuneService())'), 'and only on the console command line');
   const build = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'build-service.cjs'), 'utf8');
   assert.match(build, /compile\(path\.join\(out, 'TuneService\.exe'\)\);/, 'the shipped service is compiled without TUNE_FAULTS');
 });
