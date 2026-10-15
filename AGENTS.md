@@ -14,7 +14,13 @@ Hebrew (RTL).
   PowerShell gets its script on the command line, answers over its own pipe, and loads modules only
   from `$PSHOME` (`privilege/elevated.cjs`); the service is installed into a protected Program Files
   folder and checked there against the manifest built with this version. The service changes the PC
-  only for members of the local Administrators group; read-only requests stay open.
+  only for members of the local Administrators group; read-only requests stay open. It runs an
+  operation only once it is contained in a job object (created suspended, then assigned, then resumed)
+  and starts no other change until an end is confirmed.
+- The app sends a change to the service only when it answers the version this app was built with
+  (`privilege/service-version.cjs`); an older, unverifiable or missing service means Windows' prompt
+  (the admin session), and a request that may have run is never sent a second time
+  (`privilege/service.cjs`). Raise the version with every change to the service.
 - The window is untrusted: every request is checked in `electron/ipc/` (sender, argument shape), and
   actions carry only an ID of something the main process found itself; never a URL, hash, path or
   descriptor from the window. A new IPC channel goes in `ipc/channels.cjs` with its argument rules.
@@ -105,7 +111,8 @@ The plan and the status of every task: `docs/roadmap/`.
   `version` and `sensors` requests. The CI scripts in `scripts/ci/` that change the machine refuse to
   run outside a GitHub Actions runner; there they may also ask the service for a change that changes
   nothing (`clean` with no categories) to check who may ask, and run a console copy of the service
-  with a test `ops.ps1`.
+  with a test `ops.ps1`. Fault injection exists only in a test build of the service
+  (`build-service.cjs --test-faults <folder>`, `/define:TUNE_FAULTS`), never in what ships.
 - Publishing a release needs the owner's explicit go-ahead.
 
 ## Audit and roadmap

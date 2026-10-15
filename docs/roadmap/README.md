@@ -39,6 +39,15 @@ administrator rights.
 the real app with real DPAPI, the packaged build, the installer and the service. That document lists
 what still needs a person or a real PC.
 
+**Windows review items (2026-10-15)**, details in [`docs/audit/STATUS.md`](../audit/STATUS.md):
+WIN-R01, the licensing e2e failure on run 12, was a real app defect. The licence status waited for this
+PC's identity read (PowerShell and WMI, seconds long while the start-up scans run) although no licence
+was stored. Two reads ran at once. It is fixed, with a repeated new-profile start-up check
+(`e2e:licensing-startup`). WIN-R02 makes the service run an operation only once it is contained in its
+job, and confirm its end (service version 8). WIN-R03 stops changes from going to an older service after
+an automatic update, and offers the update (notice, Later, Settings reminder). The old service stays
+running and reachable by other programs until the user updates it.
+
 ## Step one: what was built
 
 ### P00: measurements (`electron/domain/measurement-policy.cjs`, `electron/measure-store.cjs`, `electron/features/measurements.cjs`)
