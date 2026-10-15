@@ -360,13 +360,16 @@ namespace Tune
 #if TUNE_FAULTS
         // Test builds only (scripts/ci/service-containment-check.ps1 compiles one with /define:TUNE_FAULTS;
         // the shipped service has none of this): one native step made to fail, or the assignment
-        // delayed, named by --fault on the console command line.
+        // delayed, named by --fault on the console command line. A step made to fail reports
+        // ERROR_INTERNAL_ERROR (1359), since Windows was never asked.
         static string fault;
         static bool Fault(string step) { return fault == step; }
         static void FaultDelay(string step) { if (fault == step) Thread.Sleep(3000); }
+        static int ErrorOf(string step) { return fault == step ? 1359 : Marshal.GetLastWin32Error(); }
 #else
         static bool Fault(string step) { return false; }
         static void FaultDelay(string step) { }
+        static int ErrorOf(string step) { return Marshal.GetLastWin32Error(); }
 #endif
 
         // One operation's processes: the job, the first process (PowerShell) and its main thread, and the
@@ -403,11 +406,11 @@ namespace Tune
             try
             {
                 c.Job = Fault("create-job") ? IntPtr.Zero : CreateJobObject(IntPtr.Zero, null);
-                if (c.Job == IntPtr.Zero) return Refused("Windows could not create a job object to contain it", Marshal.GetLastWin32Error());
+                if (c.Job == IntPtr.Zero) return Refused("Windows could not create a job object to contain it", ErrorOf("create-job"));
                 var limits = new ExtendedLimits();
                 limits.Basic.LimitFlags = KillOnJobClose;
                 if (Fault("configure-job") || !SetInformationJobObject(c.Job, JobObjectExtendedLimitInformation, ref limits, Marshal.SizeOf(typeof(ExtendedLimits))))
-                    return Refused("Windows could not configure the job object to end its processes", Marshal.GetLastWin32Error());
+                    return Refused("Windows could not configure the job object to end its processes", ErrorOf("configure-job"));
 
                 var inherit = new SecurityAttributes { Length = Marshal.SizeOf(typeof(SecurityAttributes)), Inherit = true };
                 IntPtr read;
@@ -430,7 +433,7 @@ namespace Tune
                 FaultDelay("delay-assign");
                 if (Fault("assign") || !AssignProcessToJobObject(c.Job, c.Process))
                 {
-                    int error = Marshal.GetLastWin32Error();
+                    int error = ErrorOf("assign");
                     // never resumed, so nothing of it ran; it is ended (and that confirmed) before the answer
                     if (!EndAll(c)) { Remember(c); c = null; }
                     return Refused("Windows could not put it in a job object", error);
@@ -472,7 +475,7 @@ namespace Tune
         {
             if (Ended(c)) return true;
             bool asked = Fault("terminate") ? false : c.InJob ? TerminateJobObject(c.Job, 1) : TerminateProcess(c.Process, 1);
-            if (!asked) c.Error = Marshal.GetLastWin32Error();
+            if (!asked) c.Error = ErrorOf("terminate");
             DateTime end = DateTime.UtcNow.AddMilliseconds(ConfirmMs);
             while (!Ended(c))
             {
@@ -548,7 +551,7 @@ namespace Tune
                 reader = StartReader(c, writer, state);
                 if (Fault("resume") || ResumeThread(c.Thread) == NoResume)
                 {
-                    c.Error = Marshal.GetLastWin32Error();
+                    c.Error = ErrorOf("resume");
                     ended = EndAll(c);
                     answer = Fail(Refused("Windows could not let it run", c.Error), "containmentFailed");
                     return;

@@ -35,6 +35,14 @@ function Children { if (Test-Path -LiteralPath $pids) { @(Get-Content -LiteralPa
 function Alive([int[]]$ids) { @($ids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }) }
 # the test ops.ps1's own PowerShell processes (started by the service with this folder on the command line)
 function OpsShells { @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like "*$dir*ops.ps1*" } | ForEach-Object { [int]$_.ProcessId }) }
+# every process started under these (their console hosts included), deepest first
+function Tree([int[]]$roots) {
+  $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name)
+  $found = @(); $next = @($roots)
+  while ($next.Count) { $kids = @($all | Where-Object { $next -contains [int]$_.ParentProcessId -and $found -notcontains [int]$_.ProcessId }); $found += @($kids | ForEach-Object { [int]$_.ProcessId }); $next = @($kids | ForEach-Object { [int]$_.ProcessId }) }
+  [array]::Reverse($found); @($found) + @($roots)
+}
+function Names([int[]]$ids) { (@($ids | ForEach-Object { $p = Get-Process -Id $_ -ErrorAction SilentlyContinue; if ($p) { "$($p.ProcessName)($_)" } }) -join ', ') }
 function Probe([string]$mode, [string]$pipe) { (node scripts/ci/service-probe.cjs $mode $pipe) | ConvertFrom-Json }
 function Start-Copy([string]$fault) {
   $pipe = "TuneFault-$fault"
@@ -45,7 +53,7 @@ function Start-Copy([string]$fault) {
 }
 function Stop-Copy($c) {
   Stop-Process -Id $c.process.Id -Force -ErrorAction SilentlyContinue
-  foreach ($id in @(OpsShells) + @(Children)) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
+  foreach ($id in (Tree (@(OpsShells) + @(Children)))) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
   Remove-Item -LiteralPath $ran, $pids -Force -ErrorAction SilentlyContinue
 }
 
@@ -87,10 +95,14 @@ try {
   Check 'refused termination: the next change hears busy, and does not run' ($b.code -eq 'busy' -and $b.error -match 'not been confirmed' -and (Runs) -eq 1) ($b | ConvertTo-Json -Compress)
   $v = Probe 'version' $c.pipe
   Check 'refused termination: read-only requests are still answered' ($v.ok -and $v.ms -lt 3000) ($v | ConvertTo-Json -Compress)
-  foreach ($id in $shells + $kids) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
-  Start-Sleep -Milliseconds 500
+  # what Windows refused to end is ended here instead: every process of the operation, console hosts too
+  $tree = Tree ($shells + $kids)
+  foreach ($id in $tree) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }
+  $end = (Get-Date).AddSeconds(15)
+  while ((Get-Date) -lt $end -and (Alive $tree).Count) { Start-Sleep -Milliseconds 200 }
+  Check 'refused termination: the test ended every process of it itself' ((Alive $tree).Count -eq 0) (Names (Alive $tree))
   $again = Probe 'change' $c.pipe
-  Check 'once its processes are gone, the next change runs again' ((Runs) -eq 2 -and $again.code -eq 'timedOut') ($again | ConvertTo-Json -Compress)
+  Check 'once its processes are gone, the next change runs again' ((Runs) -eq 2 -and $again.code -eq 'timedOut') "$($again | ConvertTo-Json -Compress) left: $(Names (Alive $tree))"
 } finally { Stop-Copy $c }
 
 if ($script:failures) { Write-Output "$script:failures FAILED"; exit 1 }

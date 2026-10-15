@@ -16,7 +16,9 @@ function withFakes(serviceAnswer) {
   const pipe = require(path.join(EL, 'pipe.cjs'));
   const admin = require(path.join(EL, 'admin-session.cjs'));
   const real = { pipeCall: pipe.pipeCall, adminCall: admin.adminCall };
-  pipe.pipeCall = async (name, req) => { calls.push(['service', name, req.op]); return serviceAnswer; };
+  // the current service answers its version (WIN-R03: it is asked first); no service answers nothing
+  const version = { ok: true, data: { version: require(path.join(EL, 'service-version.cjs')) } };
+  pipe.pipeCall = async (name, req) => { calls.push(['service', name, req.op]); return req.op === 'version' ? serviceAnswer && version : serviceAnswer; };
   admin.adminCall = async (req) => { calls.push(['admin', req.op]); return { ok: true, data: 'via admin' }; };
   delete require.cache[require.resolve(path.join(EL, 'service.cjs'))];
   const service = require(path.join(EL, 'service.cjs'));
@@ -30,16 +32,16 @@ test("a user the service refuses (not an administrator) gets Windows' own prompt
   const { service, calls } = withFakes({ ok: false, error: 'only an administrator of this PC can ask the Tune service to change it', code: 'notAllowed' });
   const r = await service.privileged({ op: 'clean', keys: ['userTemp'] });
   assert.deepEqual(r, { ok: true, data: 'via admin' });
-  assert.deepEqual(calls, [['service', 'TuneService', 'clean'], ['admin', 'clean']]);
+  assert.deepEqual(calls, [['service', 'TuneService', 'version'], ['service', 'TuneService', 'clean'], ['admin', 'clean']]);
 });
 
 test('an answer from the service is used as it is; no service means the admin session', async () => {
   let { service, calls } = withFakes({ ok: true, data: { freed: 0 } });
   assert.deepEqual(await service.privileged({ op: 'clean', keys: [] }), { ok: true, data: { freed: 0 }, via: 'service' });
-  assert.deepEqual(calls.map((c) => c[0]), ['service']);
+  assert.deepEqual(calls.map((c) => c[0]), ['service', 'service']);
   ({ service, calls } = withFakes({ ok: false, error: 'another change is running', code: 'busy' }));
   assert.equal((await service.privileged({ op: 'clean', keys: [] })).code, 'busy', 'busy is not a reason to ask for elevation');
-  assert.deepEqual(calls.map((c) => c[0]), ['service']);
+  assert.deepEqual(calls.map((c) => c[0]), ['service', 'service']);
   ({ service, calls } = withFakes(null));
   assert.deepEqual(await service.privileged({ op: 'restore' }), { ok: true, data: 'via admin' });
   assert.deepEqual(calls.map((c) => c[0]), ['service', 'admin']);
@@ -84,10 +86,12 @@ test('the service: an operation runs only once it is contained, and its end is c
   assert.ok(at(contain, 'CreateProcess(') < at(contain, '!AssignProcessToJobObject(c.Job, c.Process)'));
   assert.doesNotMatch(contain, /ResumeThread/, 'nothing is let run while being contained');
   for (const step of ['c.Job == IntPtr.Zero) return Refused', '!SetInformationJobObject(', '!CreatePipe(', '!CreateProcess(', '!AssignProcessToJobObject(']) at(contain, step);
+  // the shipped build reports Windows' own error for each refusal
+  assert.match(cs, /#else[\s\S]{0,200}static int ErrorOf\(string step\) \{ return Marshal\.GetLastWin32Error\(\); \}\s+#endif/);
   assert.ok(at(run, 'Contain(line, out c)') < at(run, 'if (refused != null)') && at(run, 'if (refused != null)') < at(run, 'ResumeThread(c.Thread) == NoResume'));
   assert.match(run, /"containmentFailed"/);
   // termination is asked for with its result kept, and confirmed by the job's own count
-  assert.match(cs, /bool asked = Fault\("terminate"\) \? false : c\.InJob \? TerminateJobObject\(c\.Job, 1\) : TerminateProcess\(c\.Process, 1\);\s+if \(!asked\) c\.Error = Marshal\.GetLastWin32Error\(\);/);
+  assert.match(cs, /bool asked = Fault\("terminate"\) \? false : c\.InJob \? TerminateJobObject\(c\.Job, 1\) : TerminateProcess\(c\.Process, 1\);\s+if \(!asked\) c\.Error = ErrorOf\("terminate"\);/);
   assert.match(cs, /return Exited\(c\.Process\) && \(!c\.InJob \|\| ActiveProcesses\(c\.Job\) == 0\);/);
   assert.match(run, /if \(ended\) c\.Close\(\); else Remember\(c\);/, 'an unconfirmed end is kept, never forgotten');
   // the next change first settles what wasn't confirmed, and hears "busy" while anything is left
