@@ -1,9 +1,20 @@
 # Plan: the privileged boundary (TUN-01, TUN-02, TUN-06, TUN-11 journal, TUN-12)
 
-Status: **designed, not implemented**. These change code that runs as LocalSystem or elevated, and
-each needs a disposable Windows VM with two accounts to prove both the allowed and the denied
-cases. Shipping them untested could leave Tune's background service broken on users' PCs, so they
-wait for that environment. Everything here builds on what batches C2–E already put in place.
+Status (2026-10-15): **TUN-01, TUN-02, TUN-06 and TUN-12 implemented and validated** on GitHub's
+disposable Windows runners (the CI VM, with a second, standard account), as recorded in
+[STATUS.md](STATUS.md); TUN-09 waits for a certificate (the pipeline is ready), TUN-11's journal is
+not done. What was built differs from this plan where noted below. The plan as first written follows.
+
+- TUN-01: the rule is "members of the local Administrators group" (enabled or UAC deny-only) for
+  changes, read-only requests for everyone signed in; one pipe, not two. The caller-program check
+  (step 2) waits for signing.
+- TUN-02: requests are not HMAC-signed: any program running as the user can already drive Tune
+  itself, so a key it could read adds nothing. Instead nothing elevated is read from or written to a
+  user-writable place (script on the command line, answers over a pipe, modules from `$PSHOME`), and
+  the operations stay the fixed catalog. The manifest lives in the app and is checked in the
+  protected folder after copying.
+- TUN-06: no operation IDs yet (with the journal).
+- TUN-12: the service's registered path is switched between version folders (no wrapper or pointer).
 
 ## What already narrows the boundary (done)
 

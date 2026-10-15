@@ -10,6 +10,11 @@ Hebrew (RTL).
 - CPU/GPU monitoring is read-only. Never touch coolers, fan or motherboard controllers, or power supplies.
 - Machine changes go through the fixed operations in `electron/privilege/operations.cjs` / the service;
   no arbitrary scripts from the renderer.
+- Elevated code never runs from, writes to or loads modules from a place a user can write: elevated
+  PowerShell gets its script on the command line, answers over its own pipe, and loads modules only
+  from `$PSHOME` (`privilege/elevated.cjs`); the service is installed into a protected Program Files
+  folder and checked there against the manifest built with this version. The service changes the PC
+  only for members of the local Administrators group; read-only requests stay open.
 - The window is untrusted: every request is checked in `electron/ipc/` (sender, argument shape), and
   actions carry only an ID of something the main process found itself; never a URL, hash, path or
   descriptor from the window. A new IPC channel goes in `ipc/channels.cjs` with its argument rules.
@@ -44,7 +49,9 @@ a time, progress, the result banner), `app/useCommands.js` (what each button run
 | `system.cjs` | facade: the one interface `main.cjs` uses (same exports as before the split) | everything below |
 | `features/` | hardware, drivers, gpu-drivers, bios, cleanup, startup, sensors, measurements, recommendations, restore | `infra/`, `domain/`, `privilege/` |
 | `privilege/operations.cjs` | the fixed admin operations (PowerShell bodies) — the only code ever elevated | – |
-| `privilege/service.cjs`, `privilege/admin-session.cjs` | the LocalSystem service and the UAC admin session that run those operations | `infra/`, `privilege/` |
+| `privilege/service.cjs`, `privilege/admin-session.cjs` | the LocalSystem service (install, update side by side with rollback, removal) and the UAC admin session that run those operations | `infra/`, `privilege/` |
+| `privilege/elevated.cjs`, `privilege/pipe.cjs` | starting elevated PowerShell from the command line alone; the one-request-per-connection pipe protocol the service and the elevated helpers speak | `infra/`, `privilege/` |
+| `privilege/service-version.cjs` | the service's version, compiled into `service/TuneService.cs` by `scripts/build-service.cjs` (which also writes the file manifest, and signs the service when a certificate is configured) | – |
 | `infra/` | running PowerShell, downloading files | Node only |
 | `domain/` | pure rules: recommendation policy, vendor guidance with sources (`advice-rules.cjs`), version compare, measurements and their comparison (`measurement-policy.cjs`) | `domain/` only |
 | `licensing/` | the licensing client that ships: config, API requests, DPAPI storage, identity and device key, certificate checks and licence state, entitlements, the flows (`client.cjs`); `index.cjs` puts them together for `main.cjs` | `licensing/`, `infra/` (never `features/`, `privilege/`, `ipc/`) |
@@ -87,13 +94,18 @@ The plan and the status of every task: `docs/roadmap/`.
 - `node --check electron/*.cjs`: main-process syntax
 - `node --test "licensing/**/*.test.cjs"`: the licensing server PoC alone (also part of `npm test`)
 - `npm run e2e:<name>`: the real app with a display (`e2e/README.md`); `e2e:licensing` needs Node 22+ on PATH
+- CI (`.github/workflows/ci.yml`) runs the Windows checks on disposable runners, including the packaged
+  build, the installer and the service; what still needs a person: `docs/windows-validation.md`
 
 ## Safety while developing
 
 - Never run machine-changing operations (driver installs, cleanup, startup changes, restore points,
   service install) on a real PC to test a change; use mocks, or a disposable Windows VM.
 - Test harnesses must refuse the service pipe (`\\.\pipe\TuneService`) except for the read-only
-  `version` and `sensors` requests.
+  `version` and `sensors` requests. The CI scripts in `scripts/ci/` that change the machine refuse to
+  run outside a GitHub Actions runner; there they may also ask the service for a change that changes
+  nothing (`clean` with no categories) to check who may ask, and run a console copy of the service
+  with a test `ops.ps1`.
 - Publishing a release needs the owner's explicit go-ahead.
 
 ## Audit and roadmap

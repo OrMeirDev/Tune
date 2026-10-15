@@ -29,9 +29,15 @@ Separate work, not part of L01 or L02: payment and webhooks (L04), real email de
 writes owner codes to an outbox table), an admin UI (L03), and production infrastructure (hosting,
 the database, key management, monitoring). No build points customers at the PoC server.
 
-The audit's open findings stay open: TUN-01, TUN-02, TUN-06, TUN-09 and TUN-12
-([`docs/audit/STATUS.md`](../audit/STATUS.md)). Licensing changes none of them: a licence grants no
-Windows administrator rights, and the privileged boundary is unchanged.
+The audit's privileged-boundary findings (2026-10-15, [`docs/audit/STATUS.md`](../audit/STATUS.md)):
+TUN-01, TUN-02, TUN-06 and TUN-12 are fixed and validated on disposable Windows CI runners; TUN-09
+(signing) stays open until there is a certificate (the pipeline is ready, decision 9 in
+[`decisions-he.md`](decisions-he.md)). Licensing changes none of them: a licence grants no Windows
+administrator rights.
+
+**Windows validation** now runs in CI on every push ([`docs/windows-validation.md`](../windows-validation.md)):
+the real app with real DPAPI, the packaged build, the installer and the service. That document lists
+what still needs a person or a real PC.
 
 ## Step one: what was built
 
@@ -189,7 +195,10 @@ asked for. Same method, on Linux:
 | --- | --- | --- | --- |
 | L02-R08 | After a `rate_limited` answer (429, retry after 120 s) the background waited, but "Check now", Try again and a request straight from the window (`license:refresh`, `license:retry`) were sent at once: refresh, wake, refresh, refresh sent 3 requests | One guard where every refresh request is sent (`refreshNow`): not before the server's wait ends, nor within a minute of the previous refresh request. Before that the check is answered locally (`rateLimited`, the seconds left, `deferred`): no request, no attempt recorded, the deadline unchanged, the stored licence and a pending Try again kept. The regular background cadence stays separate: "Check now" doesn't wait for the next scheduled renewal | `licensing-cooldown` (5): 4 fail on `62105d1` (the reviewer's sequence: 3 requests for 1; Try again sent during the wait; a second "Check now" within the minimum gap sent; 6 requests from the window for 1), the manual/background coincidence guard passes before and after (one request); now each asserts request counts, the seconds left, the unchanged deadline up to 1 ms before it, the renewal at it, and the cadence 11 hours on. `e2e:licensing` step 4: a second "Check now" right away shows "Try again in N seconds" with the licence as it was; on the `62105d1` app it sent a request instead (1 FAILED); now 30/30 |
 
-Pending on Windows 10 and 11 (not done; this environment has no Windows):
+On Windows (2026-10-15): CI runs step 1 on every push (Windows Server runner: `e2e:licensing` with
+real DPAPI and the runner's machine id, `license.bin` unreadable), step 4's packaged-build check (the
+packaged app ignores `TUNE_*`) and step 6 (`e2e:layout` with the Settings card). Still by hand, on
+Windows 10 and 11 clients, as listed below and in [`docs/windows-validation.md`](../windows-validation.md):
 
 1. `npm run e2e:licensing` on each, unpackaged (real DPAPI and the PC's own machine id): all checks
    pass; `license.bin` in the profile holds no readable key or certificate (search it for
