@@ -85,7 +85,22 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-fund --no-audit
-      - name: build (service, renderer, unsigned installer; never published)
+      # The release is signed the way a real certificate would sign it (audit TUN-09), with a
+      # throwaway self-signed one made here and trusted on this runner only; it never leaves it.
+      - name: a throwaway code-signing certificate (rehearses the signed release)
+        shell: pwsh
+        run: |
+          $c = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Tune CI throwaway signing' -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(1)
+          $pw = [guid]::NewGuid().ToString()
+          $pfx = Join-Path $env:RUNNER_TEMP 'ci-signing.pfx'
+          Export-PfxCertificate -Cert $c -FilePath $pfx -Password (ConvertTo-SecureString $pw -AsPlainText -Force) | Out-Null
+          foreach ($name in 'Root', 'TrustedPublisher') {
+            $store = New-Object Security.Cryptography.X509Certificates.X509Store($name, 'LocalMachine'); $store.Open('ReadWrite'); $store.Add($c); $store.Close()
+          }
+          "CSC_LINK=$pfx" >> $env:GITHUB_ENV
+          "CSC_KEY_PASSWORD=$pw" >> $env:GITHUB_ENV
+          "TUNE_CI_SIGNER=$($c.Thumbprint)" >> $env:GITHUB_ENV
+      - name: build (service, renderer, installer signed with the throwaway certificate; never published)
         run: npm run dist -- --publish never
       - name: packed contents; development licensing overrides ignored
         run: node scripts/ci/packaged-check.cjs

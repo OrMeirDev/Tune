@@ -122,10 +122,12 @@ function Test-ServiceAnswers([string]$version, [int]$seconds) {
 // 3. only then are older folders removed (the previous one is kept for one more update).
 // It also installs the official PawnIO driver (CPU sensors) if it isn't there yet (downloaded into
 // the protected folder and checked first).
-// A manifest names only plain file names, each with a SHA-256, and a whole-number version.
+// A manifest names only plain file names, each with a SHA-256, and a whole-number version; a signed
+// build also names its signer's certificate thumbprint.
 const validManifest = (m) => !!m && /^\d+$/.test(String(m.version)) && !!m.files && typeof m.files === 'object'
   && Object.keys(m.files).length > 0
-  && Object.entries(m.files).every(([n, h]) => /^[A-Za-z0-9._-]+$/.test(n) && !/^\.+$/.test(n) && /^[0-9A-F]{64}$/.test(h));
+  && Object.entries(m.files).every(([n, h]) => /^[A-Za-z0-9._-]+$/.test(n) && !/^\.+$/.test(n) && /^[0-9A-F]{64}$/.test(h))
+  && (m.signer === undefined || /^[0-9A-F]{40}$/.test(m.signer));
 
 function installService(srcDir, onProgress, { manifest = bundledManifest() } = {}) {
   if (!manifest) return Promise.resolve({ ok: false, error: 'this build of Tune has no service manifest (npm run build:service)' });
@@ -159,7 +161,13 @@ foreach ($e in $expected) {
   }
 }
 Assert-Protected $dst
-$svc = Get-Service TuneService -ErrorAction SilentlyContinue
+${manifest.signer ? `# a signed build: the service must carry a valid signature from the same certificate (audit TUN-09)
+$sig = Get-AuthenticodeSignature -LiteralPath (Join-Path $dst 'TuneService.exe')
+if ($sig.Status -ne 'Valid' -or $sig.SignerCertificate.Thumbprint -ne ${psString(manifest.signer)}) {
+  Remove-Item -LiteralPath $dst -Recurse -Force
+  throw "the service is not validly signed by Tune's publisher ($($sig.Status)); nothing was changed"
+}
+` : ''}$svc = Get-Service TuneService -ErrorAction SilentlyContinue
 $previous = if ($svc) { [string](Get-CimInstance Win32_Service -Filter "Name='TuneService'").PathName } else { $null }
 $bin = '"' + (Join-Path $dst 'TuneService.exe') + '"'
 if ($svc -and $svc.Status -ne 'Stopped') { Stop-Service TuneService -Force; $svc.WaitForStatus('Stopped', '00:00:20') }

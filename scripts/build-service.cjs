@@ -5,8 +5,16 @@
 //   its version from electron/privilege/service-version.cjs (the one the app expects);
 // - ops.ps1, generated from the same operations Tune runs through the admin session;
 // - electron/privilege/service-manifest.json (packed into the app): the SHA-256 of every file above,
-//   which the elevated installer checks each copy against inside Program Files (audit TUN-02).
-const { execFileSync } = require('child_process');
+//   which the elevated installer checks each copy against inside Program Files (audit TUN-02), and the
+//   thumbprint of the certificate TuneService.exe is signed with, when it is.
+//
+// Signing (audit TUN-09): with a certificate configured, TuneService.exe is signed here, before it is
+// hashed; electron-builder is told not to sign it again (package.json win.signExts "!TuneService.exe"),
+// which would change the file after its hash was taken. TUNE_SIGN_COMMAND (a command with {file}) is
+// for a certificate on a token or in a signing service; otherwise CSC_LINK (the path of a .pfx) and
+// CSC_KEY_PASSWORD, the variables electron-builder signs Tune.exe and the installer with.
+// TUNE_SIGN_TIMESTAMP_URL adds a timestamp. Without any of them the build is unsigned.
+const { execFileSync, execSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
@@ -32,6 +40,29 @@ const buildInfo = (v) => {
   if (!/^\d+$/.test(v)) throw new Error(`serviceVersion must be a whole number, not ${v}`);
   return `namespace Tune { static class BuildInfo { public const string Version = "${v}"; } }\n`;
 };
+
+const powershell = (command) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', command], { encoding: 'utf8', env: process.env }).trim();
+
+// The thumbprint of the certificate a file is signed with, or null.
+const signerOf = (file) => powershell(`$s = Get-AuthenticodeSignature -LiteralPath '${file.replace(/'/g, "''")}'; if ($s.SignerCertificate) { $s.SignerCertificate.Thumbprint }`) || null;
+
+// Signs TuneService.exe when a certificate is configured; returns the signer's thumbprint, or null.
+function signService(file) {
+  if (process.env.TUNE_SIGN_COMMAND) {
+    execSync(process.env.TUNE_SIGN_COMMAND.split('{file}').join(`"${file}"`), { stdio: 'inherit' });
+  } else if (process.env.CSC_LINK) {
+    if (!fs.existsSync(process.env.CSC_LINK)) throw new Error('CSC_LINK must be the path of a .pfx file to sign the service');
+    const ts = process.env.TUNE_SIGN_TIMESTAMP_URL ? ' -TimestampServer $env:TUNE_SIGN_TIMESTAMP_URL' : '';
+    powershell('$c = New-Object Security.Cryptography.X509Certificates.X509Certificate2($env:CSC_LINK, $env:CSC_KEY_PASSWORD); '
+      + `$r = Set-AuthenticodeSignature -LiteralPath '${file.replace(/'/g, "''")}' -Certificate $c -HashAlgorithm SHA256${ts}; `
+      + "if (-not $r.SignerCertificate) { throw \"signing failed: $($r.StatusMessage)\" }");
+  } else {
+    return null;
+  }
+  const signer = signerOf(file);
+  if (!signer) throw new Error('TuneService.exe is not signed after signing');
+  return signer;
+}
 
 // Every file the service folder gets, with its SHA-256 (upper-case hex, as Get-FileHash prints it),
 // and an id for this exact set (a new folder per build in Program Files).
@@ -77,9 +108,10 @@ async function fetchLibreHardwareMonitor() {
     ...LHM.files.map((f) => `/r:${path.join(out, f)}`), path.join(root, 'service', 'TuneService.cs'), path.join(gen, 'BuildInfo.g.cs')], { stdio: 'inherit' });
   fs.rmSync(gen, { recursive: true, force: true });
   fs.writeFileSync(path.join(out, 'ops.ps1'), '\ufeff' + require('../electron/system.cjs').serviceOpsScript(), 'utf8');
-  const manifest = manifestOf(out, version);
+  const signer = signService(path.join(out, 'TuneService.exe'));
+  const manifest = { ...manifestOf(out, version), ...(signer ? { signer } : {}) };
   fs.writeFileSync(path.join(root, 'electron', 'privilege', 'service-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-  console.log(`service ${version} built (${manifest.id}):`, Object.keys(manifest.files).join(', '));
+  console.log(`service ${version} built (${manifest.id}${signer ? `, signed by ${signer}` : ', unsigned'}):`, Object.keys(manifest.files).join(', '));
 })().catch((e) => { console.error(e.message || e); process.exit(1); });
 
 module.exports = { buildInfo, manifestOf };

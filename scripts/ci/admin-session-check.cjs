@@ -34,7 +34,9 @@ const adminPipes = () => fs.readdirSync('\\\\.\\pipe\\').filter((n) => n.startsW
   check('an operation outside the fixed list is refused', unknown.ok === false && /unknown request/.test(unknown.error), unknown);
   const after = tempScripts();
   check('no script file or request folder was written to %TEMP%', JSON.stringify(after) === JSON.stringify(before), after.filter((n) => !before.includes(n)));
-  const open = adminPipes();
+  // between two requests the helper briefly has no pipe instance (it makes a new one per connection)
+  let open = adminPipes();
+  for (let i = 0; i < 20 && open.length !== 1; i++) { await wait(150); open = adminPipes(); }
   check('one admin helper pipe while the session runs', open.length === 1, open);
   adminStop();
   for (let i = 0; i < 20 && adminPipes().length; i++) await wait(500);

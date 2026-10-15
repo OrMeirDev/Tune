@@ -139,3 +139,17 @@ test('the build manifest: the SHA-256 of each service file, and an id for the se
   assert.match(m.id, /^[0-9a-f]{12}$/);
   assert.equal(service.validManifest(m), true);
 });
+
+test('a signed build: the service is signed before it is hashed, never re-signed, and the installer requires the signer', () => {
+  const pkg = require('../package.json');
+  assert.ok((pkg.build.win.signExts || []).includes('!TuneService.exe'), 'electron-builder leaves TuneService.exe as hashed');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'build-service.cjs'), 'utf8');
+  assert.ok(src.indexOf('signService(path.join(out') < src.indexOf('manifestOf(out, version)'), 'signed, then hashed');
+  const signer = 'AB'.repeat(20);
+  assert.equal(service.validManifest({ ...sample, signer }), true);
+  assert.equal(service.validManifest({ ...sample, signer: 'not-a-thumbprint' }), false);
+  const signed = service.installScript(longSrc, { ...sample, signer });
+  assert.match(signed, new RegExp(`SignerCertificate\\.Thumbprint -ne '${signer}'`));
+  assert.ok(signed.indexOf('Get-AuthenticodeSignature -LiteralPath (Join-Path $dst') < signed.indexOf('sc.exe config TuneService binPath= $bin'), 'checked before the switch');
+  assert.doesNotMatch(service.installScript(longSrc, sample), /Join-Path \$dst 'TuneService\.exe'\)\s*\nif \(\$sig/, 'an unsigned build has no signer to require');
+});

@@ -7,7 +7,7 @@
 //    policy). Read from the real window through the DevTools protocol; the app is then ended.
 // Nothing here changes the PC: the probe asks only for the licence status and sends one request
 // the IPC layer refuses as malformed.
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const net = require('node:net');
@@ -40,6 +40,20 @@ function packedFiles() {
   const shipped = fs.readdirSync(service).filter((n) => /\.(exe|dll|ps1|txt)$/i.test(n)).sort();
   const wrong = shipped.filter((n) => manifest.files[n] !== crypto.createHash('sha256').update(fs.readFileSync(path.join(service, n))).digest('hex').toUpperCase());
   check('the manifest names every shipped service file with its SHA-256', JSON.stringify(Object.keys(manifest.files).sort()) === JSON.stringify(shipped) && wrong.length === 0, { shipped: shipped.length, wrong });
+  // a signed build (CI signs with a throwaway certificate, audit TUN-09): Tune, the service and the
+  // installer carry valid signatures from it, and the manifest names it (the service's hash above
+  // proves electron-builder didn't sign it again after it was hashed)
+  const signer = process.env.TUNE_CI_SIGNER;
+  if (signer) {
+    const setup = fs.readdirSync(path.join(root, 'release')).find((n) => /^Tune-Setup-.*\.exe$/.test(n));
+    for (const f of [path.join(unpacked, 'Tune.exe'), path.join(service, 'TuneService.exe'), path.join(root, 'release', setup)]) {
+      const s = execFileSync('powershell.exe', ['-NoProfile', '-Command', `$s = Get-AuthenticodeSignature -LiteralPath '${f}'; "$($s.Status)|$($s.SignerCertificate.Thumbprint)"`], { encoding: 'utf8' }).trim();
+      check(`signed: ${path.basename(f)}`, s === `Valid|${signer}`, s);
+    }
+    check('the manifest names the signer', manifest.signer === signer, manifest.signer);
+  } else {
+    console.log('NOTE unsigned build: no certificate configured');
+  }
 }
 
 // One DevTools session to the app's page: evaluate an expression (awaiting a promise) by value.

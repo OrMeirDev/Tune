@@ -73,7 +73,10 @@
           ]
         }
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "signExts": [
+        "!TuneService.exe"
+      ]
     },
     "nsis": {
       "oneClick": false,

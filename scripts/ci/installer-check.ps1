@@ -78,6 +78,10 @@ if ($current) {
 }
 $v = Version
 Check "service: answers the version request with $expected" ($v.ok -and [string]$v.data.version -eq $expected) ($v | ConvertTo-Json -Compress)
+if ($env:TUNE_CI_SIGNER -and $current) {
+  $sig = Get-AuthenticodeSignature -LiteralPath (Join-Path $current 'TuneService.exe')
+  Check 'TUN-09: the installed service carries a valid signature from the build certificate' ($sig.Status -eq 'Valid' -and $sig.SignerCertificate.Thumbprint -eq $env:TUNE_CI_SIGNER) "$($sig.Status) $($sig.SignerCertificate.Thumbprint)"
+}
 
 # 1b) who may ask the installed service for a change (TUN-01): an administrator yes, a standard user
 #     no ("notAllowed"); both may ask the read-only version. The change asked for cleans no category,
@@ -85,8 +89,10 @@ Check "service: answers the version request with $expected" ($v.ok -and [string]
 $admin = (node scripts/ci/service-probe.cjs noop-change) | ConvertFrom-Json
 Check 'TUN-01: an administrator may ask for a change' ($admin.ok -and [int64]$admin.data.freed -eq 0) ($admin | ConvertTo-Json -Compress)
 $user = 'tunestd'
-$pw = 'Tn-' + [guid]::NewGuid().ToString('N').Substring(0, 16) + '!a1'
+# 14 characters: net.exe asks for confirmation (and gets none in CI) above that
+$pw = 'Tn' + [guid]::NewGuid().ToString('N').Substring(0, 9) + '!a1'
 & net.exe user $user $pw /add | Out-Null
+if ($LASTEXITCODE) { throw "could not create the standard user (net user exited $LASTEXITCODE)" }
 try {
   $probe = 'C:\Users\Public\tune-service-probe.cjs'
   Copy-Item -LiteralPath scripts/ci/service-probe.cjs -Destination $probe -Force
