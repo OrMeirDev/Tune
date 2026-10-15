@@ -63,13 +63,46 @@ test('the service: read-only questions for everyone, changes only for administra
   // every operation has a time limit, and a late one ends with everything it started
   for (const op of ['drivers', 'enable', 'clean', 'startup', 'hags', 'restore']) assert.match(cs, new RegExp(`\\{ "${op}", \\d+ \\}`), op);
   assert.match(cs, /KillOnJobClose = 0x2000/);
-  assert.match(cs, /TerminateJobObject\(job, 1\)/);
+  assert.match(cs, /TerminateJobObject\(c\.Job, 1\)/);
   assert.match(cs, /"timedOut"/);
   // the console run's shorter limit can't reach the installed service (it only exists with --console)
   const start = cs.slice(cs.indexOf('internal static void Start('), cs.indexOf('public TuneService()'));
   assert.ok(start.indexOf('--op-seconds') > start.indexOf('args[0] == "--console"') && start.indexOf('--op-seconds') < start.indexOf('Run(new TuneService())'));
 });
 
+// WIN-R02 (static; the Windows behaviour is scripts/ci/service-containment-check.ps1): nothing of an
+// operation runs before it is in its job, every native step's result is checked, and the next change
+// waits for a confirmed end.
+test('the service: an operation runs only once it is contained, and its end is confirmed', () => {
+  const cs = fs.readFileSync(path.join(__dirname, '..', 'service', 'TuneService.cs'), 'utf8');
+  const contain = cs.slice(cs.indexOf('string Contain('), cs.indexOf('static int ActiveProcesses('));
+  const run = cs.slice(cs.indexOf('void RunOperation('), cs.indexOf('// Lines from the operation'));
+  const at = (src, s) => { const i = src.indexOf(s); assert.ok(i >= 0, s); return i; };
+  // created suspended, then put in the job (checked); resumed only in RunOperation, after Contain succeeded
+  assert.match(contain, /CreateProcess\(ps, command, IntPtr\.Zero, IntPtr\.Zero, true, CreateSuspended \| CreateNoWindow/);
+  assert.ok(at(contain, 'CreateJobObject(') < at(contain, 'SetInformationJobObject(') && at(contain, 'SetInformationJobObject(') < at(contain, 'CreateProcess('));
+  assert.ok(at(contain, 'CreateProcess(') < at(contain, '!AssignProcessToJobObject(c.Job, c.Process)'));
+  assert.doesNotMatch(contain, /ResumeThread/, 'nothing is let run while being contained');
+  for (const step of ['c.Job == IntPtr.Zero) return Refused', '!SetInformationJobObject(', '!CreatePipe(', '!CreateProcess(', '!AssignProcessToJobObject(']) at(contain, step);
+  assert.ok(at(run, 'Contain(line, out c)') < at(run, 'if (refused != null)') && at(run, 'if (refused != null)') < at(run, 'ResumeThread(c.Thread) == NoResume'));
+  assert.match(run, /"containmentFailed"/);
+  // termination is asked for with its result kept, and confirmed by the job's own count
+  assert.match(cs, /bool asked = Fault\("terminate"\) \? false : c\.InJob \? TerminateJobObject\(c\.Job, 1\) : TerminateProcess\(c\.Process, 1\);\s+if \(!asked\) c\.Error = Marshal\.GetLastWin32Error\(\);/);
+  assert.match(cs, /return Exited\(c\.Process\) && \(!c\.InJob \|\| ActiveProcesses\(c\.Job\) == 0\);/);
+  assert.match(run, /if \(ended\) c\.Close\(\); else Remember\(c\);/, 'an unconfirmed end is kept, never forgotten');
+  // the next change first settles what wasn't confirmed, and hears "busy" while anything is left
+  const serve = cs.slice(cs.indexOf('void Serve('), cs.indexOf('static string ReadLine('));
+  assert.ok(at(serve, 'Monitor.TryEnter(opLock') < at(serve, 'SettleUnconfirmed()') && at(serve, 'SettleUnconfirmed()') < at(serve, 'RunOperation(line, writer, limitMs)'));
+  // fault injection exists only in the test build (TUNE_FAULTS), parsed only on the console command line
+  const seam = cs.slice(cs.indexOf('#if TUNE_FAULTS', cs.indexOf('string Contain(') - 4000), cs.indexOf('sealed class Contained'));
+  assert.ok(at(seam, 'static string fault;') < at(seam, '#else') && at(seam, '#else') < at(seam, 'static bool Fault(string step) { return false; }') && at(seam, '#endif'));
+  assert.equal((cs.match(/static string fault;/g) || []).length, 1);
+  const start = cs.slice(cs.indexOf('internal static void Start('), cs.indexOf('public TuneService()'));
+  assert.match(start, /#if TUNE_FAULTS\s+if \(args\[i\] == "--fault"\) fault = args\[i \+ 1\];\s+#endif/);
+  const build = fs.readFileSync(path.join(__dirname, '..', 'scripts', 'build-service.cjs'), 'utf8');
+  assert.match(build, /compile\(path\.join\(out, 'TuneService\.exe'\)\);/, 'the shipped service is compiled without TUNE_FAULTS');
+});
+
 test('the service version moved with the service code', () => {
-  assert.equal(require(path.join(EL, 'service-version.cjs')), '7');
+  assert.equal(require(path.join(EL, 'service-version.cjs')), '8');
 });

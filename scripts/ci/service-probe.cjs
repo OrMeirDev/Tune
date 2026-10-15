@@ -7,6 +7,7 @@
 //   hang               { op: 'hags' } only to a console test copy (never TuneService), whose ops.ps1
 //                      is a test script that hangs; plus, while it runs, a version request and a
 //                      second change (should hear "busy")
+//   change             { op: 'hags' } only to a console test copy (never TuneService): one change, and its answer
 //   status             { op: 'status' } only to an elevated admin helper's pipe (TuneAdmin-...): when
 //                      its session ends, which changes nothing; shows whether this account may connect
 // Usage: node service-probe.cjs <mode> [pipe name, default TuneService]
@@ -48,6 +49,10 @@ function ask(req, { raw, timeoutMs = 30000 } = {}) {
   if (mode === 'status') {
     if (!/^TuneAdmin-[0-9a-z]+$/.test(pipe)) { print({ ok: false, error: 'status is only for an admin helper pipe' }); process.exit(2); }
     return print(await ask({ op: 'status' }, { timeoutMs: 10000 }));
+  }
+  if (mode === 'change') {
+    if (pipe === 'TuneService') { print({ ok: false, error: 'change is only for a console test copy' }); process.exit(2); }
+    return print(await ask({ op: 'hags' }, { timeoutMs: 60000 }));
   }
   if (mode === 'hang') {
     if (pipe === 'TuneService') { print({ ok: false, error: 'hang is only for a console test copy' }); process.exit(2); }

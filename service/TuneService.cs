@@ -11,8 +11,10 @@
 //   them; a standard user is refused ("notAllowed") and Tune falls back to Windows' own prompt.
 // - It runs only the fixed operations in ops.ps1 (next to this exe), which re-check every request.
 // - Deadlines (audit TUN-06): a request line must arrive within 5 s; one change runs at a time (a second
-//   one waits 2 s, then hears "busy"); each operation has a time limit, after which it is ended
-//   together with every process it started (a Windows job object) and answered "timedOut".
+//   one waits 2 s, then hears "busy"); each operation runs only inside a Windows job object, created
+//   suspended and let run only once it is in the job (no job, no operation), and has a time limit,
+//   after which it is ended together with every process it started and answered "timedOut". No other
+//   change starts until Windows has confirmed that end.
 //
 // Built with the C# 5 compiler that ships with Windows (.NET Framework 4.8): scripts/build-service.cjs.
 using System;
@@ -81,6 +83,9 @@ namespace Tune
                 {
                     if (args[i] == "--pipe") PipeName = args[i + 1];
                     if (args[i] == "--op-seconds") consoleOperationSeconds = Math.Max(1, int.Parse(args[i + 1]));
+#if TUNE_FAULTS
+                    if (args[i] == "--fault") fault = args[i + 1];
+#endif
                 }
                 var s = new TuneService();
                 s.OnStart(null);
@@ -180,6 +185,8 @@ namespace Tune
                     }
                     try
                     {
+                        string stillRunning = SettleUnconfirmed();
+                        if (stillRunning != null) { Send(writer, Fail(stillRunning, "busy")); return; }
                         int limitMs = consoleOperationSeconds > 0 ? consoleOperationSeconds * 1000 : Operations[op] * 60 * 1000;
                         RunOperation(line, writer, limitMs);
                     }
@@ -263,16 +270,44 @@ namespace Tune
             finally { Marshal.FreeHGlobal(buf); }
         }
 
-        // ---------- running an operation, with a deadline (audit TUN-06) ----------
+        // ---------- running an operation, contained, with a deadline (audit TUN-06) ----------
+        //
+        // An operation runs only inside a Windows job object that ends every process in it when it is
+        // terminated or closed. PowerShell is created suspended, put in the job, and only then let run,
+        // so neither it nor a child it starts at once can ever be outside the job. If the job can't be
+        // made or configured, or the process can't be put in it, the operation is not run at all (the
+        // suspended process is ended; it never ran) and the answer says why ("containmentFailed").
+        // At its limit the job is terminated, and the operation counts as stopped only when Windows
+        // confirms it: the first process has exited and the job has no process left. Until an end is
+        // confirmed no other change starts (it is tried again at the next request; meanwhile "busy").
+        // Processes Windows starts on the operation's behalf through a service of its own (Windows
+        // Installer, Windows Update) are not in the job; they are Windows' to finish.
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         static extern IntPtr CreateJobObject(IntPtr attributes, string name);
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool SetInformationJobObject(IntPtr job, int infoClass, ref ExtendedLimits info, int length);
         [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool QueryInformationJobObject(IntPtr job, int infoClass, out BasicAccounting info, int length, IntPtr returnLength);
+        [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool TerminateJobObject(IntPtr job, uint exitCode);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern bool CreateProcess(string application, StringBuilder commandLine, IntPtr processAttributes, IntPtr threadAttributes,
+            bool inheritHandles, uint flags, IntPtr environment, string directory, ref StartupInfo startup, out ProcessInformation info);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern uint ResumeThread(IntPtr thread);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool TerminateProcess(IntPtr process, uint exitCode);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern uint WaitForSingleObject(IntPtr handle, uint ms);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool CreatePipe(out IntPtr read, out IntPtr write, ref SecurityAttributes attributes, int size);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        static extern IntPtr CreateFile(string name, uint access, uint share, ref SecurityAttributes attributes, uint disposition, uint flags, IntPtr template);
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern bool CloseHandle(IntPtr handle);
 
@@ -291,72 +326,255 @@ namespace Tune
             public BasicLimits Basic; public IoCounters Io;
             public UIntPtr ProcessMemoryLimit; public UIntPtr JobMemoryLimit; public UIntPtr PeakProcessMemoryUsed; public UIntPtr PeakJobMemoryUsed;
         }
+        [StructLayout(LayoutKind.Sequential)]
+        struct BasicAccounting
+        {
+            public long TotalUserTime, TotalKernelTime, ThisPeriodTotalUserTime, ThisPeriodTotalKernelTime;
+            public uint TotalPageFaultCount, TotalProcesses, ActiveProcesses, TotalTerminatedProcesses;
+        }
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        struct StartupInfo
+        {
+            public int Size; public string Reserved; public string Desktop; public string Title;
+            public int X, Y, Width, Height, CountCharsX, CountCharsY, FillAttribute, Flags;
+            public short ShowWindow, Reserved2Size; public IntPtr Reserved2;
+            public IntPtr StdInput, StdOutput, StdError;
+        }
+        [StructLayout(LayoutKind.Sequential)]
+        struct ProcessInformation { public IntPtr Process, Thread; public int ProcessId, ThreadId; }
+        [StructLayout(LayoutKind.Sequential)]
+        struct SecurityAttributes { public int Length; public IntPtr Descriptor; public bool Inherit; }
+
+        const int JobObjectBasicAccountingInformation = 1;
         const int JobObjectExtendedLimitInformation = 9;
         const uint KillOnJobClose = 0x2000;
+        const uint CreateSuspended = 0x4, CreateNoWindow = 0x08000000;
+        const int UseStdHandles = 0x100;
+        const uint HandleFlagInherit = 1, GenericRead = 0x80000000, GenericWrite = 0x40000000, ShareReadWrite = 3, OpenExisting = 3;
+        const uint WaitObject0 = 0, NoResume = 0xFFFFFFFF;
+        // how long an end is waited for before it counts as unconfirmed, and how long the rest of the
+        // output is waited for
+        const int ConfirmMs = 5000;
+        const int OutputGraceMs = 5000;
 
-        // A job whose processes all end when it is closed or terminated (IntPtr.Zero if Windows refused).
-        static IntPtr NewKillJob()
+#if TUNE_FAULTS
+        // Test builds only (scripts/ci/service-containment-check.ps1 compiles one with /define:TUNE_FAULTS;
+        // the shipped service has none of this): one native step made to fail, or the assignment
+        // delayed, named by --fault on the console command line.
+        static string fault;
+        static bool Fault(string step) { return fault == step; }
+        static void FaultDelay(string step) { if (fault == step) Thread.Sleep(3000); }
+#else
+        static bool Fault(string step) { return false; }
+        static void FaultDelay(string step) { }
+#endif
+
+        // One operation's processes: the job, the first process (PowerShell) and its main thread, and the
+        // read end of its output until the reader takes it. Error is the last Windows error seen.
+        sealed class Contained
         {
-            IntPtr job = CreateJobObject(IntPtr.Zero, null);
-            if (job == IntPtr.Zero) return IntPtr.Zero;
-            var info = new ExtendedLimits();
-            info.Basic.LimitFlags = KillOnJobClose;
-            if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, ref info, Marshal.SizeOf(typeof(ExtendedLimits))))
+            public IntPtr Job, Process, Thread, Output;
+            public bool InJob;
+            public int Error;
+            public void Close()
             {
-                CloseHandle(job);
-                return IntPtr.Zero;
+                foreach (IntPtr h in new[] { Thread, Output, Process, Job }) if (h != IntPtr.Zero) CloseHandle(h);
+                Thread = Output = Process = Job = IntPtr.Zero;
             }
-            return job;
         }
 
-        sealed class OperationState { public volatile bool Answered; }
+        sealed class OperationState { public bool Answered; public bool Closed; }
 
-        // The request goes to ops.ps1 as base64 on the command line, so nothing passes through
-        // files a normal user could touch. If Tune disconnects, the operation still finishes, unless it
-        // runs past its limit: then it is ended with everything it started, and answered "timedOut".
-        void RunOperation(string line, StreamWriter writer, int limitMs)
+        // Operations whose end Windows hasn't confirmed. Only touched while opLock is held.
+        readonly List<Contained> unconfirmed = new List<Contained>();
+
+        static string Refused(string what, int error)
         {
-            string ps = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
-            string script = Path.Combine(dir, "ops.ps1");
-            var psi = new ProcessStartInfo(ps, "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + script + "\" -Request " +
-                Convert.ToBase64String(Encoding.UTF8.GetBytes(line)));
-            psi.UseShellExecute = false;
-            psi.CreateNoWindow = true;
-            psi.RedirectStandardOutput = true;
-            psi.RedirectStandardError = true;
-            psi.StandardOutputEncoding = Encoding.UTF8;
-            var state = new OperationState();
-            IntPtr job = NewKillJob();
+            return "the change was not started: " + what + " (Windows error " + error + ")";
+        }
+
+        // Creates the job and, suspended, the operation's PowerShell, and puts it in the job. On any
+        // failure whatever was made is undone and the reason returned; nothing of the operation ran.
+        string Contain(string line, out Contained contained)
+        {
+            contained = null;
+            var c = new Contained();
+            IntPtr write = IntPtr.Zero, nul = IntPtr.Zero;
             try
             {
-                using (var proc = new Process())
+                c.Job = Fault("create-job") ? IntPtr.Zero : CreateJobObject(IntPtr.Zero, null);
+                if (c.Job == IntPtr.Zero) return Refused("Windows could not create a job object to contain it", Marshal.GetLastWin32Error());
+                var limits = new ExtendedLimits();
+                limits.Basic.LimitFlags = KillOnJobClose;
+                if (Fault("configure-job") || !SetInformationJobObject(c.Job, JobObjectExtendedLimitInformation, ref limits, Marshal.SizeOf(typeof(ExtendedLimits))))
+                    return Refused("Windows could not configure the job object to end its processes", Marshal.GetLastWin32Error());
+
+                var inherit = new SecurityAttributes { Length = Marshal.SizeOf(typeof(SecurityAttributes)), Inherit = true };
+                IntPtr read;
+                if (!CreatePipe(out read, out write, ref inherit, 0)) return Refused("Windows could not create its output pipe", Marshal.GetLastWin32Error());
+                c.Output = read;
+                if (!SetHandleInformation(read, HandleFlagInherit, 0)) return Refused("Windows could not keep its output pipe private", Marshal.GetLastWin32Error());
+                nul = CreateFile("NUL", GenericRead | GenericWrite, ShareReadWrite, ref inherit, OpenExisting, 0, IntPtr.Zero);
+                if (nul == new IntPtr(-1)) { nul = IntPtr.Zero; return Refused("Windows could not open NUL for it", Marshal.GetLastWin32Error()); }
+
+                string ps = Path.Combine(Environment.SystemDirectory, @"WindowsPowerShell\v1.0\powershell.exe");
+                var command = new StringBuilder("\"" + ps + "\" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + Path.Combine(dir, "ops.ps1") +
+                    "\" -Request " + Convert.ToBase64String(Encoding.UTF8.GetBytes(line)));
+                var startup = new StartupInfo { Size = Marshal.SizeOf(typeof(StartupInfo)), Flags = UseStdHandles, StdInput = nul, StdOutput = write, StdError = nul };
+                ProcessInformation info;
+                if (!CreateProcess(ps, command, IntPtr.Zero, IntPtr.Zero, true, CreateSuspended | CreateNoWindow, IntPtr.Zero, null, ref startup, out info))
+                    return Refused("Windows could not start PowerShell", Marshal.GetLastWin32Error());
+                c.Process = info.Process;
+                c.Thread = info.Thread;
+
+                FaultDelay("delay-assign");
+                if (Fault("assign") || !AssignProcessToJobObject(c.Job, c.Process))
                 {
-                    proc.StartInfo = psi;
-                    proc.OutputDataReceived += delegate (object sender, DataReceivedEventArgs e)
-                    {
-                        string l = e.Data;
-                        if (l == null) return;
-                        if (l.StartsWith("PROGRESS ")) Send(writer, "{\"progress\":" + l.Substring(9) + "}");
-                        else if (l.StartsWith("RESULT ")) { Send(writer, l.Substring(7)); state.Answered = true; }
-                    };
-                    proc.ErrorDataReceived += delegate { };
-                    proc.Start();
-                    if (job != IntPtr.Zero) AssignProcessToJobObject(job, proc.Handle);
-                    proc.BeginOutputReadLine();
-                    proc.BeginErrorReadLine();
-                    if (!proc.WaitForExit(limitMs))
-                    {
-                        if (job != IntPtr.Zero) TerminateJobObject(job, 1);
-                        else try { proc.Kill(); } catch (Exception) { }
-                        proc.WaitForExit(5000);
-                        if (!state.Answered) Send(writer, Fail("the operation did not finish in time and was stopped", "timedOut"));
-                        return;
-                    }
-                    proc.WaitForExit(); // the rest of its output
+                    int error = Marshal.GetLastWin32Error();
+                    // never resumed, so nothing of it ran; it is ended (and that confirmed) before the answer
+                    if (!EndAll(c)) { Remember(c); c = null; }
+                    return Refused("Windows could not put it in a job object", error);
                 }
+                c.InJob = true;
+                contained = c;
+                c = null;
+                return null;
             }
-            finally { if (job != IntPtr.Zero) CloseHandle(job); }
-            if (!state.Answered) Send(writer, Fail("operation ended without a result", null));
+            finally
+            {
+                // this process's copies of the child's ends: the child (and only it) keeps its own
+                if (write != IntPtr.Zero) CloseHandle(write);
+                if (nul != IntPtr.Zero) CloseHandle(nul);
+                if (c != null) c.Close();
+            }
+        }
+
+        static int ActiveProcesses(IntPtr job)
+        {
+            BasicAccounting a;
+            if (!QueryInformationJobObject(job, JobObjectBasicAccountingInformation, out a, Marshal.SizeOf(typeof(BasicAccounting)), IntPtr.Zero)) return -1;
+            return (int)a.ActiveProcesses;
+        }
+
+        static bool Exited(IntPtr process)
+        {
+            return process == IntPtr.Zero || WaitForSingleObject(process, 0) == WaitObject0;
+        }
+
+        static bool Ended(Contained c)
+        {
+            return Exited(c.Process) && (!c.InJob || ActiveProcesses(c.Job) == 0);
+        }
+
+        // Ends every process of the operation and confirms it within ConfirmMs: true only when the first
+        // process has exited and the job has none left. A refusal is kept in c.Error.
+        static bool EndAll(Contained c)
+        {
+            if (Ended(c)) return true;
+            bool asked = Fault("terminate") ? false : c.InJob ? TerminateJobObject(c.Job, 1) : TerminateProcess(c.Process, 1);
+            if (!asked) c.Error = Marshal.GetLastWin32Error();
+            DateTime end = DateTime.UtcNow.AddMilliseconds(ConfirmMs);
+            while (!Ended(c))
+            {
+                if (DateTime.UtcNow >= end) return false;
+                Thread.Sleep(100);
+            }
+            return true;
+        }
+
+        void Remember(Contained c)
+        {
+            unconfirmed.Add(c);
+        }
+
+        // Before a change: an earlier operation whose end wasn't confirmed is ended again; while any is
+        // left, the answer is the reason no change can start (null when none is left).
+        string SettleUnconfirmed()
+        {
+            for (int i = unconfirmed.Count - 1; i >= 0; i--)
+            {
+                if (EndAll(unconfirmed[i])) { unconfirmed[i].Close(); unconfirmed.RemoveAt(i); }
+            }
+            return unconfirmed.Count == 0 ? null
+                : "an earlier change has not been confirmed as stopped (Windows error " + unconfirmed[0].Error + "); no other change starts until it is";
+        }
+
+        // Reads the operation's output: progress lines and its result go to Tune as they come, until the
+        // answer for this request is closed.
+        static Thread StartReader(Contained c, StreamWriter writer, OperationState state)
+        {
+            var stream = new FileStream(new SafeFileHandle(c.Output, true), FileAccess.Read, 4096, false);
+            c.Output = IntPtr.Zero; // the stream owns it now
+            var t = new Thread(delegate ()
+            {
+                try
+                {
+                    using (var reader = new StreamReader(stream, new UTF8Encoding(false)))
+                    {
+                        string l;
+                        while ((l = reader.ReadLine()) != null)
+                        {
+                            lock (state)
+                            {
+                                if (state.Closed) return;
+                                if (l.StartsWith("PROGRESS ")) Send(writer, "{\"progress\":" + l.Substring(9) + "}");
+                                else if (l.StartsWith("RESULT ")) { Send(writer, l.Substring(7)); state.Answered = true; }
+                            }
+                        }
+                    }
+                }
+                catch (Exception) { }
+            });
+            t.IsBackground = true;
+            t.Start();
+            return t;
+        }
+
+        // The request goes to ops.ps1 as base64 on the command line, so nothing passes through files a
+        // normal user could touch. If Tune disconnects, the operation still finishes, unless it runs past
+        // its limit: then it is ended with everything it started, and answered "timedOut" (with
+        // "stopped": false when Windows hasn't confirmed that yet).
+        void RunOperation(string line, StreamWriter writer, int limitMs)
+        {
+            Contained c;
+            string refused = Contain(line, out c);
+            if (refused != null) { Send(writer, Fail(refused, "containmentFailed")); return; }
+            var state = new OperationState();
+            Thread reader = null;
+            bool ended = false;
+            string answer = null;
+            try
+            {
+                reader = StartReader(c, writer, state);
+                if (Fault("resume") || ResumeThread(c.Thread) == NoResume)
+                {
+                    c.Error = Marshal.GetLastWin32Error();
+                    ended = EndAll(c);
+                    answer = Fail(Refused("Windows could not let it run", c.Error), "containmentFailed");
+                    return;
+                }
+                bool finished = WaitForSingleObject(c.Process, (uint)limitMs) == WaitObject0;
+                if (finished) reader.Join(OutputGraceMs);
+                // anything it left running ends with the job; past its limit, everything does
+                ended = EndAll(c);
+                reader.Join(OutputGraceMs);
+                if (finished) answer = Fail("operation ended without a result", null);
+                else if (ended) answer = Fail("the operation did not finish in time and was stopped", "timedOut");
+                else answer = Fail("the operation did not finish in time; Windows has not confirmed that it stopped (error " + c.Error +
+                    "), so no other change starts until it has", "timedOut", false);
+            }
+            catch (Exception e)
+            {
+                ended = EndAll(c);
+                answer = Fail("the operation failed: " + e.Message, null);
+            }
+            finally
+            {
+                bool answered;
+                lock (state) { state.Closed = true; answered = state.Answered; }
+                if (!answered && answer != null) Send(writer, answer);
+                if (ended) c.Close(); else Remember(c);
+            }
         }
 
         // Lines from the operation's output thread and from this one never interleave.
@@ -377,6 +595,12 @@ namespace Tune
         {
             var r = new Dictionary<string, object> { { "ok", false }, { "error", error } };
             if (code != null) r["code"] = code;
+            return new JavaScriptSerializer().Serialize(r);
+        }
+
+        static string Fail(string error, string code, bool stopped)
+        {
+            var r = new Dictionary<string, object> { { "ok", false }, { "error", error }, { "code", code }, { "stopped", stopped } };
             return new JavaScriptSerializer().Serialize(r);
         }
 

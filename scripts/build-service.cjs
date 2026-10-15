@@ -96,19 +96,43 @@ async function fetchLibreHardwareMonitor() {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+const csc = () => path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
+
+// TuneService.exe from service/TuneService.cs, with this version compiled in; `defines` only for the
+// fault-injection test copy (below).
+function compile(exe, defines = []) {
+  const gen = fs.mkdtempSync(path.join(os.tmpdir(), 'tune-service-'));
+  try {
+    fs.writeFileSync(path.join(gen, 'BuildInfo.g.cs'), buildInfo(version));
+    execFileSync(csc(), ['/nologo', '/optimize+', '/target:exe', '/platform:anycpu', `/out:${exe}`, ...defines.map((d) => `/define:${d}`),
+      '/r:System.ServiceProcess.dll', '/r:System.Web.Extensions.dll', '/r:System.Core.dll',
+      ...LHM.files.map((f) => `/r:${path.join(out, f)}`), path.join(root, 'service', 'TuneService.cs'), path.join(gen, 'BuildInfo.g.cs')], { stdio: 'inherit' });
+  } finally {
+    fs.rmSync(gen, { recursive: true, force: true });
+  }
+}
+
 (async () => {
   if (require.main !== module) return;
+  // `--test-faults <folder>`: a copy of the service whose console mode can make one native step of
+  // containment fail (TUNE_FAULTS), for scripts/ci/service-containment-check.ps1 on a CI runner. It
+  // goes only to that folder: never service/bin, the manifest or the installer.
+  const faults = process.argv.indexOf('--test-faults');
+  if (faults > 0) {
+    const dir = process.argv[faults + 1];
+    if (!dir || path.resolve(dir).startsWith(path.resolve(out))) throw new Error('--test-faults needs a folder outside service/bin');
+    if (!fs.existsSync(path.join(out, 'LibreHardwareMonitorLib.dll'))) throw new Error('build the service first (npm run build:service)');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const f of fs.readdirSync(out).filter((n) => /\.(dll|txt)$/i.test(n))) fs.copyFileSync(path.join(out, f), path.join(dir, f));
+    compile(path.join(dir, 'TuneService.exe'), ['TUNE_FAULTS']);
+    console.log(`service ${version} test copy with fault injection built in ${dir}`);
+    return;
+  }
   fs.mkdirSync(out, { recursive: true });
   // Left over from the first version, which read the CPU through its own PawnIO module.
   for (const f of ['IntelMSR.bin', 'PawnIO-modules-COPYING.txt']) fs.rmSync(path.join(out, f), { force: true });
   await fetchLibreHardwareMonitor();
-  const csc = path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
-  const gen = fs.mkdtempSync(path.join(os.tmpdir(), 'tune-service-'));
-  fs.writeFileSync(path.join(gen, 'BuildInfo.g.cs'), buildInfo(version));
-  execFileSync(csc, ['/nologo', '/optimize+', '/target:exe', '/platform:anycpu', `/out:${path.join(out, 'TuneService.exe')}`,
-    '/r:System.ServiceProcess.dll', '/r:System.Web.Extensions.dll', '/r:System.Core.dll',
-    ...LHM.files.map((f) => `/r:${path.join(out, f)}`), path.join(root, 'service', 'TuneService.cs'), path.join(gen, 'BuildInfo.g.cs')], { stdio: 'inherit' });
-  fs.rmSync(gen, { recursive: true, force: true });
+  compile(path.join(out, 'TuneService.exe'));
   fs.writeFileSync(path.join(out, 'ops.ps1'), '\ufeff' + require('../electron/system.cjs').serviceOpsScript(), 'utf8');
   const signer = signService(path.join(out, 'TuneService.exe'));
   const manifest = { ...manifestOf(out, version), ...(signer ? { signer } : {}) };

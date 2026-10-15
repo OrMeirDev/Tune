@@ -111,6 +111,10 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: ./scripts/ci/service-deadlines-check.ps1
+      - name: service containment (a test build that makes each native step fail in turn)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: ./scripts/ci/service-containment-check.ps1
       - name: admin session (elevated from the command line, answers over its own pipe)
         if: ${{ !cancelled() }}
         run: node scripts/ci/admin-session-check.cjs
