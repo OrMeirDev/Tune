@@ -32,17 +32,19 @@ $ran = Join-Path $dir 'ran.txt'
 $pids = Join-Path $dir 'child.pids'
 function Runs { if (Test-Path -LiteralPath $ran) { @(Get-Content -LiteralPath $ran).Count } else { 0 } }
 function Children { if (Test-Path -LiteralPath $pids) { @(Get-Content -LiteralPath $pids | ForEach-Object { [int]$_ }) } else { @() } }
-function Alive([int[]]$ids) { @($ids | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }) }
+# (a function's empty array arrives as $null: every id is checked for that)
+function Alive([int[]]$ids) { @(@($ids) | Where-Object { $null -ne $_ -and (Get-Process -Id $_ -ErrorAction SilentlyContinue) }) }
 # the test ops.ps1's own PowerShell processes (started by the service with this folder on the command line)
 function OpsShells { @(Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" | Where-Object { $_.CommandLine -like "*$dir*ops.ps1*" } | ForEach-Object { [int]$_.ProcessId }) }
 # every process started under these (their console hosts included), deepest first
 function Tree([int[]]$roots) {
+  $roots = @(@($roots) | Where-Object { $null -ne $_ })
   $all = @(Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, Name)
   $found = @(); $next = @($roots)
   while ($next.Count) { $kids = @($all | Where-Object { $next -contains [int]$_.ParentProcessId -and $found -notcontains [int]$_.ProcessId }); $found += @($kids | ForEach-Object { [int]$_.ProcessId }); $next = @($kids | ForEach-Object { [int]$_.ProcessId }) }
   [array]::Reverse($found); @($found) + @($roots)
 }
-function Names([int[]]$ids) { (@($ids | ForEach-Object { $p = Get-Process -Id $_ -ErrorAction SilentlyContinue; if ($p) { "$($p.ProcessName)($_)" } }) -join ', ') }
+function Names([int[]]$ids) { (@(@($ids) | Where-Object { $null -ne $_ } | ForEach-Object { $p = Get-Process -Id $_ -ErrorAction SilentlyContinue; if ($p) { "$($p.ProcessName)($_)" } }) -join ', ') }
 function Probe([string]$mode, [string]$pipe) { (node scripts/ci/service-probe.cjs $mode $pipe) | ConvertFrom-Json }
 function Start-Copy([string]$fault) {
   $pipe = "TuneFault-$fault"
