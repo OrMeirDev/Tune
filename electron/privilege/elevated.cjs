@@ -11,7 +11,8 @@
 //   say) that the elevated script would then load. Pinned first thing in the bootstrap and again in
 //   the script (ELEVATED_PRELUDE).
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const path = require('path');
+const { execFileSync, spawn } = require('child_process');
 const zlib = require('zlib');
 const { PRELUDE, PS } = require('../infra/powershell.cjs');
 const { pipeCall, wait, PIPE_SERVER_PS } = require('./pipe.cjs');
@@ -52,10 +53,25 @@ function startElevated(script) {
 
 const newPipeName = (prefix) => `${prefix}-${crypto.randomBytes(12).toString('hex')}`;
 
+// The Windows account Tune runs as, which the elevated helper's pipe must let in (see PIPE_SERVER_PS);
+// null when it can't be read (the pipe then admits the elevated account only, as before).
+const SID = /^S-1-[0-9]+(-[0-9]+)+$/;
+let requester;
+function requesterSid() {
+  if (requester !== undefined) return requester;
+  try {
+    const out = execFileSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'whoami.exe'), ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8', windowsHide: true });
+    const m = /"(S-1-[0-9-]+)"\s*$/.exec(out.trim());
+    requester = m && SID.test(m[1]) ? m[1] : null;
+  } catch { requester = null; }
+  return requester;
+}
+const userLine = (sid) => `$tuneUser = ${sid && SID.test(sid) ? `'${sid}'` : '$null'}\n`;
+
 // A one-off elevated script (one approval prompt, then it exits), for installing or removing the
 // service: `body` runs with Report-Progress and leaves its answer in $result. It serves exactly one
 // connection on its own pipe; Tune connects, asks it to run, and reads progress and the result.
-const oneShotScript = (pipeName, body) => `${ELEVATED_PRELUDE}${PIPE_SERVER_PS}
+const oneShotScript = (pipeName, body, sid = null) => `${ELEVATED_PRELUDE}${userLine(sid)}${PIPE_SERVER_PS}
 $pipe = New-TunePipe '${pipeName}'
 try {
   $ar = $pipe.BeginWaitForConnection($null, $null)
@@ -75,7 +91,7 @@ ${body}
 async function runElevated(body, { timeoutMs = 10 * 60 * 1000, onProgress } = {}) {
   const pipeName = newPipeName('TuneElevated');
   let started;
-  try { started = await startElevated(oneShotScript(pipeName, body)); } catch (e) { return { ok: false, error: String(e.message || e) }; }
+  try { started = await startElevated(oneShotScript(pipeName, body, requesterSid())); } catch (e) { return { ok: false, error: String(e.message || e) }; }
   if (!started.ok) return started;
   // PowerShell starts and opens its pipe within a few seconds (longer while antivirus scans it)
   for (let i = 0; i < 200; i++) {
@@ -86,4 +102,4 @@ async function runElevated(body, { timeoutMs = 10 * 60 * 1000, onProgress } = {}
   return { ok: false, error: 'the elevated step did not start' };
 }
 
-module.exports = { COMMAND_LINE_MAX, ELEVATED_PRELUDE, encodedCommand, elevatedArgs, startElevated, newPipeName, oneShotScript, runElevated };
+module.exports = { COMMAND_LINE_MAX, ELEVATED_PRELUDE, encodedCommand, elevatedArgs, startElevated, newPipeName, requesterSid, userLine, oneShotScript, runElevated };

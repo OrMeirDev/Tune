@@ -4,6 +4,8 @@
 #    Files, every file there matching the manifest built with this version, answering version
 # 2) a service file changed in the per-user install folder is refused; the running service is untouched
 #    (audit TUN-02)
+# 1b, 1c) who may ask the service for a change (TUN-01); a standard user reaches the elevated helper
+#    that Windows' prompt starts for it as an administrator
 # 3) an update installs side by side and keeps the previous version; one whose service never starts
 #    is rolled back (audit TUN-12, scripts/ci/service-update-check.cjs)
 # 4) silent uninstall removes Tune and the service
@@ -98,10 +100,10 @@ try {
   Copy-Item -LiteralPath scripts/ci/service-probe.cjs -Destination $probe -Force
   $cred = New-Object Management.Automation.PSCredential($user, (ConvertTo-SecureString $pw -AsPlainText -Force))
   $node = (Get-Command node).Source
-  function As-Standard([string]$mode) {
+  function As-Standard([string]$mode, [string]$pipe = 'TuneService') {
     $out = "C:\Users\Public\tune-probe-$mode.json"
     Remove-Item -LiteralPath $out -ErrorAction SilentlyContinue
-    Start-Process -FilePath $node -ArgumentList $probe, $mode -Credential $cred -LoadUserProfile -WorkingDirectory 'C:\Users\Public' -RedirectStandardOutput $out -Wait -WindowStyle Hidden | Out-Null
+    Start-Process -FilePath $node -ArgumentList $probe, $mode, $pipe -Credential $cred -LoadUserProfile -WorkingDirectory 'C:\Users\Public' -RedirectStandardOutput $out -Wait -WindowStyle Hidden | Out-Null
     (Get-Content -LiteralPath $out -Raw) | ConvertFrom-Json
   }
   $adminsGroup = (New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')).Translate([Security.Principal.NTAccount]).Value.Split('\')[-1]
@@ -111,6 +113,26 @@ try {
   Check 'TUN-01: a standard user may ask the read-only version' ($sv.ok -and [string]$sv.data.version -eq $expected) ($sv | ConvertTo-Json -Compress)
   $sc = As-Standard 'noop-change'
   Check 'TUN-01: a standard user may not ask for a change (notAllowed)' ($sc.ok -eq $false -and $sc.code -eq 'notAllowed') ($sc | ConvertTo-Json -Compress)
+
+  # 1c) so a standard user's change goes through Windows' prompt, where an administrator signs in and
+  #     the elevated helper runs as that administrator's account: its pipe must admit the standard
+  #     user's account, which Tune names (privilege/elevated.cjs). Two helpers started here, elevated
+  #     as the runner's administrator: one naming the standard user, one naming nobody.
+  $stdSid = (New-Object Security.Principal.NTAccount($user)).Translate([Security.Principal.SecurityIdentifier]).Value
+  $named = 'TuneAdmin-ci' + [guid]::NewGuid().ToString('N')
+  $plain = 'TuneAdmin-ci' + [guid]::NewGuid().ToString('N')
+  try {
+    $h1 = (node scripts/ci/admin-helper.cjs start $named $PID $stdSid) | ConvertFrom-Json
+    $h2 = (node scripts/ci/admin-helper.cjs start $plain $PID none) | ConvertFrom-Json
+    Check 'over the shoulder: two elevated helpers start' ($h1.ok -and $h2.ok) "$($h1 | ConvertTo-Json -Compress) $($h2 | ConvertTo-Json -Compress)"
+    $s1 = As-Standard 'status' $named
+    Check "over the shoulder: the standard user reaches the helper that names its account" ($s1.ok -and [int64]$s1.data.until -gt 0) ($s1 | ConvertTo-Json -Compress)
+    $s2 = As-Standard 'status' $plain
+    Check "over the shoulder: and not one that names nobody (the pipe is the administrator's)" ($s2.ok -eq $false -and $s2.error -match 'EPERM|EACCES') ($s2 | ConvertTo-Json -Compress)
+  } finally {
+    node scripts/ci/admin-helper.cjs stop $named | Out-Null
+    node scripts/ci/admin-helper.cjs stop $plain | Out-Null
+  }
 } finally {
   & net.exe user $user /delete | Out-Null
 }

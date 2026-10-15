@@ -70,8 +70,16 @@ test('the privileged modules never write a script or a result file for an elevat
   }
 });
 
-test("the elevated pipe is this user's only (plus SYSTEM and administrators), and a silent client can't hold it", () => {
-  const helper = adminHelper('TuneAdmin-x', 1);
+test("the elevated pipe is the asking account's (plus the elevated one, SYSTEM and administrators), and a silent client can't hold it", () => {
+  // with Windows' over-the-shoulder prompt the helper runs as an administrator's account, while Tune
+  // (a standard user) is the one that connects: the pipe names Tune's account explicitly
+  const sid = 'S-1-5-21-1111111111-2222222222-3333333333-1001';
+  for (const s of [adminHelper('TuneAdmin-x', 1, sid), oneShotScript('TuneElevated-x', '$result = 1', sid)]) {
+    assert.ok(s.includes(`$tuneUser = '${sid}'`), 'the asking account is named');
+    assert.ok(s.indexOf('$tuneUser = ') < s.indexOf('function New-TunePipe'), 'before the pipe is made');
+  }
+  assert.match(adminHelper('TuneAdmin-x', 1, "S-1-5-21-1'; evil"), /\$tuneUser = \$null/, 'anything but a SID is left out');
+  const helper = adminHelper('TuneAdmin-x', 1, sid);
   assert.match(helper, /WindowsIdentity\]::GetCurrent\(\)\.User/);
   assert.match(helper, /'S-1-5-18', 'S-1-5-32-544'/);
   assert.doesNotMatch(helper, /S-1-1-0|S-1-5-11|S-1-5-4'|Everyone|Interactive/i, 'no group of other users');

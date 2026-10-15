@@ -115,3 +115,26 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: ./scripts/ci/installer-check.ps1
+
+  upgrade:
+    name: upgrade from the published 1.3.1 (disposable runner)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-fund --no-audit
+      - name: the published 1.3.1 installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download v1.3.1 --repo ${{ github.repository }} --pattern 'Tune-Setup-*.exe' --dir old
+      - name: build (unsigned; never published)
+        run: npm run dist -- --publish never
+      - name: install 1.3.1, then this build over it
+        shell: pwsh
+        run: ./scripts/ci/upgrade-check.ps1

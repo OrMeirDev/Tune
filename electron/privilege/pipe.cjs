@@ -46,15 +46,20 @@ function pipeOnce(name, req, { timeoutMs = 30000, onProgress } = {}) {
   });
 }
 
-// PowerShell for an elevated script that serves Tune over its own pipe. The pipe is open to this
-// Windows user (the one who approved the prompt) and to SYSTEM and administrators, nobody else; one
+// PowerShell for an elevated script that serves Tune over its own pipe. The pipe is open to the
+// Windows account Tune runs as ($tuneUser, set by the script: with Windows' over-the-shoulder prompt a
+// standard user's request runs elevated as an administrator's account, which is not the one that must
+// connect), to the elevated account itself, and to SYSTEM and administrators; nobody else. One
 // connection at a time. Reading the request has a deadline, so a client that connects and says
 // nothing can't hold the helper. `Send-Line` never throws: if Tune went away, the work still finishes.
 const PIPE_SERVER_PS = `
 function New-TunePipe([string]$name) {
   $sec = New-Object IO.Pipes.PipeSecurity
-  $me = [Security.Principal.WindowsIdentity]::GetCurrent().User
-  $sec.AddAccessRule((New-Object IO.Pipes.PipeAccessRule($me, [IO.Pipes.PipeAccessRights]::ReadWrite, [Security.AccessControl.AccessControlType]::Allow)))
+  $users = @([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)
+  if ($tuneUser) { $users += $tuneUser }
+  foreach ($u in ($users | Select-Object -Unique)) {
+    $sec.AddAccessRule((New-Object IO.Pipes.PipeAccessRule((New-Object Security.Principal.SecurityIdentifier($u)), [IO.Pipes.PipeAccessRights]::ReadWrite, [Security.AccessControl.AccessControlType]::Allow)))
+  }
   foreach ($sid in @('S-1-5-18', 'S-1-5-32-544')) {
     $sec.AddAccessRule((New-Object IO.Pipes.PipeAccessRule((New-Object Security.Principal.SecurityIdentifier($sid)), [IO.Pipes.PipeAccessRights]::FullControl, [Security.AccessControl.AccessControlType]::Allow)))
   }
