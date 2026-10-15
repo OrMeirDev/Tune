@@ -20,7 +20,7 @@ decisions (see the end).
 | P07 | Upgrade advice (PF08) | Not started; needs P01, P05 |
 | L00 | Licence policy and choice of service | Open decisions (below) |
 | L01 | Server and one-time redemption | **Proof of concept completed**: `licensing/` (not shipped in the installer); run `node --test "licensing/**/*.test.cjs"` |
-| L02 | Activation and recovery inside Tune | **Implemented and repaired after two reviews (R01–R07), Windows validation pending**: main-process client, renewal while Tune runs, confirmed release, Settings flow in English and Hebrew, entitlement mechanism (shipped policy: open). Verified off Windows with a DPAPI stand-in; the Windows steps below are not done yet |
+| L02 | Activation and recovery inside Tune | **Implemented and repaired after three reviews (R01–R08), Windows validation pending**: main-process client, renewal while Tune runs, confirmed release, Settings flow in English and Hebrew, entitlement mechanism (shipped policy: open). Verified off Windows with a DPAPI stand-in; the Windows steps below are not done yet |
 | L03 | Admin and manual sale | Not started (the PoC has the admin issuing call only) |
 | L04 | Automatic payment | Not started; needs a payment provider |
 | L05 | Self-service recovery | Not started (L02 recovers on the same PC; moving to another PC needs a release, which only the server API offers) |
@@ -108,12 +108,18 @@ What is implemented and tested off Windows:
 - **Renewal while Tune runs**: the certificate (7 days) is renewed in the background 12 hours after the
   last successful check, or sooner to renew ahead of its end (2 days before it, but not before half
   the time to it has passed). A certificate that already ends with the licence (its last week) can't
-  be extended, so the next check is at the licence's end, and never sooner than an hour after a
-  success: on the last day that is one check at 12 hours and one at the end, which the server answers
+  be extended by renewing, so it isn't renewed ahead of its end: the next check is 12 hours after the
+  last one, or at the licence's end if that comes sooner, and never sooner than an hour after a
+  success. On the last day that is one check at 12 hours and one at the end, which the server answers
   as ended. Every result plans the next request: no answer is tried again after 1, 2, 4 ... minutes
   (at most an hour apart); an answer that didn't renew (a refusal, a certificate that doesn't
   verify, which never replaces the stored one) after 1, 2, 4 ... hours (at most 12); a server's
-  `rate_limited` delay is always waited for (up to 12 hours). A look happens at least every 15
+  `rate_limited` delay is always waited for (up to 12 hours). That wait, and a minute after the
+  previous refresh request, hold for every refresh whoever sends it (the background, "Check now", Try
+  again, a request straight from the window): until then the check is answered in Tune with the time
+  left ("Too many attempts. Try again in N seconds."), without a request, with the stored licence and
+  a pending Try again unchanged and the deadline unmoved. "Check now" never waits for the next
+  scheduled renewal, only for those two. A look happens at least every 15
   minutes, when the certificate runs out, and at once on resume or unlock, always against the current
   clock (a clock set back stops renewal and is reported); none of these sends before the planned
   time. One request at a time: "Check now" during a background renewal takes its answer, and its own
@@ -147,11 +153,13 @@ What is implemented and tested off Windows:
 - **Tests**: `tests/licensing-client.test.cjs` (19, the client against the PoC over real HTTP),
   `tests/licensing-repairs.test.cjs` (14, the first review's regressions on a hand-moved clock and
   timers), `tests/licensing-renewal.test.cjs` (9, the second review's: renewal planning and notices),
+  `tests/licensing-cooldown.test.cjs` (5, the third review's: the wait before any refresh request),
   `tests/e2e-harness.test.cjs` (7, the e2e runner as real processes), IPC bypass attempts in
   `tests/ipc.test.cjs`, wording in `tests/licensing-text.test.cjs`, architecture rules;
-  `npm run e2e:licensing` (28 checks, the real app against the PoC, keyboard, Hebrew RTL, an outage
-  and retry, a confirmed release and its recovery, the clock set back and corrected with the open
-  Settings row following without a click).
+  `npm run e2e:licensing` (30 checks, the real app against the PoC, keyboard, Hebrew RTL, an outage
+  and retry, a second "Check now" within a minute answered without a request, a confirmed release and
+  its recovery, the clock set back and corrected with the open Settings row following without a
+  click).
 
 #### Review repairs (2026-10-14)
 
@@ -173,6 +181,13 @@ run on `bc8d17f` (fails) and after the repair (passes), on Linux:
 | --- | --- | --- | --- |
 | L02-R06 | Renewal could plan requests with zero delay: (A) a `rate_limited` answer's delay was dropped, (B) a certificate that didn't verify or a refusal was retried at once, (C) after a success on the licence's last day (a 24 h certificate) "2 days before the end" was already past, (D) a licence the server confirmed as ended read as a merely `expired` certificate once that ran out, so renewal went on | Every result plans the next request (`planAfter`: the server's delay, spaced retries for answers that didn't renew, never a request within a minute of the last); the cadence after a success follows the certificate and the licence's end, never sooner than an hour; a confirmed end is read past the certificate's expiry (re-checked as at its last moment: signature, this PC, this install's key) and stops renewal | `licensing-renewal` R06 (6): all 6 fail on `bc8d17f` (A: next timer 0 ms; B: 4 requests for 1; C: next timer 0 ms; D: state `expired`, not `licenseExpired`); each now asserts request counts, future deadlines, stored state and, for D, a restart, with scheduled timers and repeated wakes |
 | L02-R07 | A state the clock alone changed didn't reach the window: `tick` compared two readings taken with the same, already changed clock | The client remembers the state the window was last given and tells it when a look finds another one; the next look is also planned for the moment the certificate runs out; the Settings row drops an earlier "Check now" result when the state changes | `licensing-renewal` R07 (3): 2 fail on `bc8d17f` (active → clock: 0 notices; expiry during an outage: told only by the next renewal attempt), the no-flood guard passes before and after; `e2e:licensing` step 6 on the `bc8d17f` app: the gate already refused but the open row still said "Active." (1 FAILED); after: the row shows the clock message and then "Active." again, without a click (28/28) |
+
+The third review (of `62105d1`, 2026-10-15) found that a person's check bypassed a wait the server had
+asked for. Same method, on Linux:
+
+| ID | Gap | Repair | Evidence |
+| --- | --- | --- | --- |
+| L02-R08 | After a `rate_limited` answer (429, retry after 120 s) the background waited, but "Check now", Try again and a request straight from the window (`license:refresh`, `license:retry`) were sent at once: refresh, wake, refresh, refresh sent 3 requests | One guard where every refresh request is sent (`refreshNow`): not before the server's wait ends, nor within a minute of the previous refresh request. Before that the check is answered locally (`rateLimited`, the seconds left, `deferred`): no request, no attempt recorded, the deadline unchanged, the stored licence and a pending Try again kept. The regular background cadence stays separate: "Check now" doesn't wait for the next scheduled renewal | `licensing-cooldown` (5): 4 fail on `62105d1` (the reviewer's sequence: 3 requests for 1; Try again sent during the wait; a second "Check now" within the minimum gap sent; 6 requests from the window for 1), the manual/background coincidence guard passes before and after (one request); now each asserts request counts, the seconds left, the unchanged deadline up to 1 ms before it, the renewal at it, and the cadence 11 hours on. `e2e:licensing` step 4: a second "Check now" right away shows "Try again in N seconds" with the licence as it was; on the `62105d1` app it sent a request instead (1 FAILED); now 30/30 |
 
 Pending on Windows 10 and 11 (not done; this environment has no Windows):
 
