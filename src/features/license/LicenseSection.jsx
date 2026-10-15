@@ -1,7 +1,7 @@
 // The licence in Settings: its state, package, dates and the last successful check, and the way to
 // activate it or bring it back on this PC. Licensing never blocks anything else on the page, and a
 // failed request only leaves a message: every action here clears its busy state when it returns.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { KeyRound, RefreshCw } from 'lucide-react';
 import { api } from '../../api.js';
 import { useT } from '../../i18n.js';
@@ -29,9 +29,17 @@ export function LicenseSection() {
     }
   }, []);
   useEffect(() => { if (api?.licenseStatus) call(() => api.licenseStatus()); }, [call]);
-  // a background renewal (or a release it found) updates the row without a click
+  // a background renewal (or a release it found), or a state the clock alone changed (set back,
+  // corrected, a certificate running out), updates the row without a click; when the state itself
+  // changed, an earlier "Check now" result no longer describes it, so it goes
+  const shownState = useRef(null);
+  shownState.current = lic?.license?.state ?? null;
   useEffect(() => api?.onLicenseChange?.(() => {
-    api.licenseStatus().then((r) => { if (r?.ok && r.data) setLic(r.data); }).catch(() => {});
+    api.licenseStatus().then((r) => {
+      if (!r?.ok || !r.data) return;
+      if ((r.data.license?.state ?? null) !== shownState.current) setChecked(null);
+      setLic(r.data);
+    }).catch(() => {});
   }), []);
   const checkNow = () => call(async () => {
     const r = await api.licenseRefresh();

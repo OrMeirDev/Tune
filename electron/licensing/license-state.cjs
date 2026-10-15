@@ -9,7 +9,7 @@
 //   expired     the certificate's time ran out; a check with the server renews it if the licence is
 //               still valid
 //   revoked / licenseExpired   the server said so on the last check (the certificate is kept, not
-//               deleted, but no longer counts)
+//               deleted, but no longer counts); still so after the certificate itself ran out
 //   released    the server confirmed that this PC's seat was released (the owner moved the licence);
 //               kept until a recovery the server approves. An offline PC that never got this answer
 //               keeps following its signed certificate.
@@ -36,6 +36,14 @@ function evaluate({ license, lastSeenAt, publicKey, machineId, devicePublicKey, 
   let v;
   try {
     v = verify(license.certificate, publicKey, { now, machineId, devicePublicKey, skewMs: CLOCK_SKEW_MS });
+    // A licence the server confirmed as ended (revoked, or past its own end) stays ended after its
+    // certificate runs out too, so it is never renewed again. The certificate is then checked as at
+    // its last moment: its signature, this PC and this install's key are still verified before the
+    // end is read from it. A certificate that ran out while the licence is fine stays 'expired'.
+    const ended = license.serverStatus === 'revoked' || license.serverStatus === 'expired';
+    if (!v.ok && v.reason === 'expired' && ended) {
+      v = verify(license.certificate, publicKey, { now: license.certificate.payload.expiresAt - 1, machineId, devicePublicKey, skewMs: CLOCK_SKEW_MS });
+    }
   } catch {
     return { state: 'invalid', reason: 'unverifiable' };
   }

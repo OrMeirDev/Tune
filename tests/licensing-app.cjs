@@ -88,4 +88,30 @@ async function verifiedOwner(srv, app, email = 'owner@example.com') {
 const code = (srv, opts) => srv.order(opts).units[0].code;
 const outcome = (r) => r.data.outcome.result;
 
-module.exports = { fakeCrypt, fakeTimers, server, tune, verifiedOwner, code, outcome };
+// Counts the requests to one route (and how many were in flight at once, and when each was sent);
+// `down` makes them fail like a network outage.
+function watch(route, inner = fetch) {
+  const w = { count: 0, inFlight: 0, maxInFlight: 0, down: false, times: [] };
+  w.fetch = async (url, init) => {
+    if (!url.endsWith(route)) return inner(url, init);
+    w.count++;
+    w.inFlight++;
+    w.maxInFlight = Math.max(w.maxInFlight, w.inFlight);
+    w.times.push(w.now ? w.now() : 0);
+    try {
+      if (w.down) throw new TypeError('fetch failed');
+      return await inner(url, init);
+    } finally { w.inFlight--; }
+  };
+  return w;
+}
+
+// Tune activated with a fresh Serial by a verified owner.
+async function activated(t, srv, opts = {}) {
+  const app = tune(t, srv, opts);
+  await verifiedOwner(srv, app, opts.email);
+  assert.equal(outcome(await app.client.activate(code(srv, opts.order))), 'activated');
+  return app;
+}
+
+module.exports = { fakeCrypt, fakeTimers, server, tune, verifiedOwner, code, outcome, watch, activated };

@@ -12,32 +12,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { pc, MINUTE, DAY } = require('../licensing/tests/helpers.cjs');
 const { createEntitlements } = require('../electron/licensing/entitlements.cjs');
-const { fakeTimers, server, tune, verifiedOwner, code, outcome } = require('./licensing-app.cjs');
+const { fakeTimers, server, tune, verifiedOwner, code, outcome, watch, activated } = require('./licensing-app.cjs');
 
 const HOUR = 60 * MINUTE;
-// counts the requests to one route, and how many were in flight at once
-function watch(route, inner = fetch) {
-  const w = { count: 0, inFlight: 0, maxInFlight: 0, down: false, times: [] };
-  w.fetch = async (url, init) => {
-    if (!url.endsWith(route)) return inner(url, init);
-    w.count++;
-    w.inFlight++;
-    w.maxInFlight = Math.max(w.maxInFlight, w.inFlight);
-    w.times.push(w.now ? w.now() : 0);
-    try {
-      if (w.down) throw new TypeError('fetch failed');
-      return await inner(url, init);
-    } finally { w.inFlight--; }
-  };
-  return w;
-}
-
-async function activated(t, srv, opts = {}) {
-  const app = tune(t, srv, opts);
-  await verifiedOwner(srv, app, opts.email);
-  assert.equal(outcome(await app.client.activate(code(srv, opts.order))), 'activated');
-  return app;
-}
 
 // ---- R01: automatic renewal while Tune stays open ----
 
