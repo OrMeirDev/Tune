@@ -67,6 +67,9 @@ jobs:
       - name: failed scans are never shown as fine
         if: ${{ !cancelled() }}
         run: npm run e2e:scan-failure
+      - name: an older background service (notice, Later, cancelled, failed and done update; changes never sent to it)
+        if: ${{ !cancelled() }}
+        run: npm run e2e:service-update
       - name: screenshots
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v4

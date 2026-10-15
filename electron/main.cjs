@@ -36,7 +36,9 @@ function getSettings() {
   let s = {};
   try { s = JSON.parse(fs.readFileSync(settingsFile(), 'utf8')); } catch { /* first run */ }
   // English unless the user picked Hebrew in Settings.
-  return { saveDir: s.saveDir && fs.existsSync(s.saveDir) ? s.saveDir : app.getPath('downloads'), lang: s.lang === 'he' ? 'he' : 'en', sound: s.sound !== false };
+  // serviceLater: the pair of service versions "Later" was chosen for (the outdated-service notice)
+  const serviceLater = typeof s.serviceLater === 'string' && /^(\d{1,6}|unknown)>\d{1,6}$/.test(s.serviceLater) ? s.serviceLater : null;
+  return { saveDir: s.saveDir && fs.existsSync(s.saveDir) ? s.saveDir : app.getPath('downloads'), lang: s.lang === 'he' ? 'he' : 'en', sound: s.sound !== false, serviceLater };
 }
 function saveSettings(s) {
   fs.mkdirSync(app.getPath('userData'), { recursive: true });

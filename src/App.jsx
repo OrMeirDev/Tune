@@ -21,6 +21,7 @@ import { OverviewPage } from './features/overview/OverviewPage.jsx';
 import { PerfPage } from './features/performance/PerformancePage.jsx';
 import { useLiveSensors } from './features/sensors/useSensorSnapshot.js';
 import { AdminChip } from './features/settings/PrivilegeSessionChip.jsx';
+import { ServiceUpdateNotice } from './features/settings/ServiceUpdateNotice.jsx';
 import { SettingsPage } from './features/settings/SettingsPage.jsx';
 import { StartupPage } from './features/startup/StartupPage.jsx';
 import { UpdatesPage } from './features/updates/UpdatesPage.jsx';
@@ -46,6 +47,10 @@ export default function App() {
   const [measured, setMeasured] = useState(0);
   const [live, history] = useLiveSensors(['perf', 'recs', 'overview', 'diagnose'].includes(page));
   const [service, setService] = useState(null);
+  // the last service install or update that didn't succeed (cancelled or failed), for Settings
+  const [serviceAttempt, setServiceAttempt] = useState(null);
+  // the outdated-service notice, once closed by Update, stays closed for this run
+  const [noticeClosed, setNoticeClosed] = useState(false);
   // English until the saved choice is read; a first launch stays English.
   const t = useMemo(() => makeT(settings?.lang || 'en'), [settings?.lang]);
 
@@ -64,7 +69,7 @@ export default function App() {
   const {
     installDrivers, gpuInstall, biosDownload, enable, clean, toggle, apply, restorePoint, exportHw,
     adminStart, adminStop, installService, removeService, setLang, measureRest, exportMeasurements,
-  } = useCommands({ t, act, results, loadService, setGuide, setAdminUntil, setSettings, onMeasured: () => setMeasured((n) => n + 1) });
+  } = useCommands({ t, act, results, loadService, setServiceAttempt, setGuide, setAdminUntil, setSettings, onMeasured: () => setMeasured((n) => n + 1) });
   const pickProblem = (p) => { setProblem(p); setPage('diagnose'); };
 
   useEffect(() => {
@@ -138,10 +143,15 @@ export default function App() {
             />
           )}
           {page === 'history' && <HistoryPage busy={busy} onRestorePoint={restorePoint} measured={measured} />}
-          {page === 'settings' && <SettingsPage version={version} status={appUpdate} settings={settings} onLang={setLang} onSound={async (on) => setSettings(await api.setSound(on))} service={service} onInstallService={installService} onRemoveService={removeService} busy={busy} prog={prog} onPickDir={async () => setSettings(await api.pickSaveDir())} onCheck={async () => { setAppUpdate({ state: 'checking' }); if (!(await api.checkAppUpdate())) setAppUpdate({ state: 'dev' }); }} />}
+          {page === 'settings' && <SettingsPage version={version} status={appUpdate} settings={settings} onLang={setLang} onSound={async (on) => setSettings(await api.setSound(on))} service={service} serviceAttempt={serviceAttempt} onInstallService={installService} onRemoveService={removeService} busy={busy} prog={prog} onPickDir={async () => setSettings(await api.pickSaveDir())} onCheck={async () => { setAppUpdate({ state: 'checking' }); if (!(await api.checkAppUpdate())) setAppUpdate({ state: 'dev' }); }} />}
         </main>
         {guide && bios?.latest && <BiosGuide bios={bios} onClose={() => setGuide(false)} onDownload={biosDownload} busy={busy === 'bios'} prog={prog.bios} />}
         {settingGuide && <SettingGuide item={settingGuide} boardMaker={hw?.boardMaker} onClose={() => setSettingGuide(null)} />}
+        {service?.notice && !noticeClosed && (
+          <ServiceUpdateNotice service={service} busy={busy}
+            onUpdate={() => { setNoticeClosed(true); installService(); }}
+            onLater={async () => { setNoticeClosed(true); setService(await api.serviceLater()); }} />
+        )}
       </div>
     </LangContext.Provider>
   );

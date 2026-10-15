@@ -42,6 +42,19 @@ function createChannels(d) {
     };
   };
 
+  // The service as the window shows it (WIN-R03): its status, the version this app needs, whether it
+  // needs an update (installed but not this version: Settings keeps saying so until the main process
+  // has seen this version answer), and whether to show the notice about it (an older or unverifiable
+  // service that is running, unless "Later" was chosen for this same pair of versions). What runs
+  // a change is decided in privilege/service.cjs, not here and not in the window.
+  const serviceView = async () => {
+    const s = { ...(await sys.serviceStatus()).data, bundled: sys.SERVICE_VERSION };
+    s.needsUpdate = !!(s.installed && !s.current);
+    const pair = `${s.version || 'unknown'}>${sys.SERVICE_VERSION}`;
+    s.notice = s.needsUpdate && !!s.running && d.settings.get().serviceLater !== pair;
+    return { s, pair };
+  };
+
   const table = {
     'update:check': { args: [], run: () => d.updater.check() },
     'update:download': { args: [], run: () => d.updater.download() },
@@ -176,7 +189,16 @@ function createChannels(d) {
     // only https pages, without credentials in the address
     'link:open': { args: [match(/^https:\/\/[^\s@/]+(\/[^\s]*)?$/, 2048)], run: (url) => d.shell.openExternal(url) },
 
-    'service:status': { args: [], run: async () => ({ ...(await sys.serviceStatus()).data, bundled: sys.SERVICE_VERSION }) },
+    'service:status': { args: [], run: async () => (await serviceView()).s },
+    // "Later" on the notice: not shown again for this pair of versions; the Settings reminder stays
+    'service:later': {
+      args: [],
+      run: async () => {
+        const { s, pair } = await serviceView();
+        if (s.needsUpdate) d.settings.save({ ...d.settings.get(), serviceLater: pair });
+        return (await serviceView()).s;
+      },
+    },
     'service:install': {
       args: [],
       run: async () => {

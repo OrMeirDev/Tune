@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('tune', {
   exportHardware: call('hw:export'),
   openFolder: call('folder:open'),
   serviceStatus: call('service:status'),
+  serviceLater: call('service:later'),
   installService: call('service:install'),
   uninstallService: call('service:uninstall'),
   adminStatus: call('admin:status'),

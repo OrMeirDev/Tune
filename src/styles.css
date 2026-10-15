@@ -621,6 +621,9 @@ html[dir=ltr] .path-text { text-align: left; }
 /* The licence: its row in Settings and the activation dialog (one form per step). */
 .license-setting .row-meta + .row-meta { margin-top: 1px; }
 .license-dialog { width: min(560px, 100%); }
+.service-notice { width: min(520px, 100%); }
+.service-notice-body p { margin: 0 0 10px; line-height: 1.5; }
+.svc-reminder { margin-top: 6px; }
 .license-body { display: flex; flex-direction: column; gap: 12px; padding: 4px 0 12px; overflow-y: auto; }
 .lic-form { display: flex; flex-direction: column; gap: 6px; }
 .lic-form label { font-weight: 600; font-size: 13.5px; }

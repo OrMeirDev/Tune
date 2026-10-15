@@ -20,6 +20,7 @@
     "e2e:licensing-startup": "vite build && node e2e/licensing-startup.cjs",
     "e2e:scan-failure": "vite build && electron e2e/scan-failure.cjs",
     "e2e:screenshots": "vite build && electron e2e/screenshots.cjs",
+    "e2e:service-update": "vite build && electron e2e/service-update.cjs",
     "e2e:smoke": "vite build && electron e2e/smoke.cjs"
   },
   "repository": "github:OrMeirDev/Tune",

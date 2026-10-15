@@ -5,7 +5,7 @@ import { ProgressPill } from '../../components/TaskProgress.jsx';
 import { useT } from '../../i18n.js';
 import { LicenseSection } from '../license/LicenseSection.jsx';
 
-export function SettingsPage({ version, status, onCheck, settings, onPickDir, onLang, onSound, service, onInstallService, onRemoveService, busy, prog }) {
+export function SettingsPage({ version, status, onCheck, settings, onPickDir, onLang, onSound, service, serviceAttempt, onInstallService, onRemoveService, busy, prog }) {
   const t = useT();
   const svcText = !service ? t('se.svc.checking')
     : service.running ? `${t('se.svc.running')}${service.current ? '' : t('se.svc.outdated')} · ${service.pawnio ? t('se.svc.pawnOk', { v: service.pawnio }) : t('se.svc.pawnMissing')}`
@@ -44,6 +44,19 @@ export function SettingsPage({ version, status, onCheck, settings, onPickDir, on
             <div className="setting-title">{t('se.service', { status: svcText })}</div>
             <div className="row-meta">{t('se.serviceNote')}</div>
             {!service?.running && <div className="row-meta">{t('se.noService')}</div>}
+            {/* until the main process has seen this version answer (WIN-R03) */}
+            {service?.needsUpdate && (
+              <div className="row-meta warn-text svc-reminder" role="status">
+                {service.compat === 'outdated' ? t('se.svc.reminder', { installed: service.version, bundled: service.bundled })
+                  : service.compat === 'unverifiable' ? t('se.svc.reminderUnknown', { bundled: service.bundled })
+                    : t('se.svc.reminderStopped', { bundled: service.bundled })}
+              </div>
+            )}
+            {serviceAttempt && !service?.current && (
+              <div className="row-meta warn-text" role="status">
+                {serviceAttempt.error === 'cancelled' ? t('se.svc.lastCancelled') : t('se.svc.lastFailed', { e: serviceAttempt.error })}
+              </div>
+            )}
           </div>
           <div className="header-actions">
             {busy === 'service' ? <ProgressPill p={prog.service} fallback={t('prog.working')} /> : (<>

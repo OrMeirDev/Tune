@@ -26,11 +26,12 @@ function pipeOnce(name, req, { timeoutMs = 30000, onProgress } = {}) {
     let done = false;
     const sock = net.connect(pipePath(name));
     const finish = (v) => { if (!done) { done = true; clearTimeout(timer); sock.destroy(); resolve(v); } };
-    const timer = setTimeout(() => finish(connected ? { ok: false, error: 'no answer in time' } : null), timeoutMs);
+    // once the request was sent, a missing answer leaves its outcome unknown (it may have run): 'noAnswer'
+    const timer = setTimeout(() => finish(connected ? { ok: false, error: 'no answer in time', code: 'noAnswer' } : null), timeoutMs);
     sock.setEncoding('utf8');
     sock.on('connect', () => { connected = true; sock.write(`${JSON.stringify(req)}\n`); });
-    sock.on('error', (e) => finish(connected ? { ok: false, error: String(e.message || e) } : ['ENOENT', 'EBUSY'].includes(e.code) ? 'retry' : null));
-    sock.on('close', () => finish(connected ? { ok: false, error: 'the connection closed without an answer' } : null));
+    sock.on('error', (e) => finish(connected ? { ok: false, error: String(e.message || e), code: 'noAnswer' } : ['ENOENT', 'EBUSY'].includes(e.code) ? 'retry' : null));
+    sock.on('close', () => finish(connected ? { ok: false, error: 'the connection closed without an answer', code: 'noAnswer' } : null));
     sock.on('data', (chunk) => {
       buf += chunk;
       for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {

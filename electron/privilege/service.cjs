@@ -42,20 +42,51 @@ async function serviceCall(req, opts = {}) {
   return r ? { ...r, via: 'service' } : null;
 }
 
-// Every privileged operation: the service if it's running and lets this user ask, otherwise the
-// admin session (Windows' own approval prompt). The service refuses a user who isn't an
-// administrator on this PC (audit TUN-01): that user gets the normal prompt for admin credentials.
-async function privileged(req, opts) {
-  const r = await serviceCall(req, opts);
-  if (r && !(r.ok === false && r.code === 'notAllowed')) return r;
-  return adminCall(req, opts);
+// Whether the service that answers on the pipe may run this app's changes (WIN-R03): only the version
+// this app was built with (service-version.cjs). An older one lacks fixes the app relies on (who may
+// ask, TUN-01; deadlines and containment, TUN-06 and WIN-R02), and one that doesn't answer a
+// well-formed version can't be trusted with a change. -> { state, version }:
+//   'current'       this version
+//   'outdated'      another, well-formed version (e.g. 6 or 7 from an earlier Tune)
+//   'unverifiable'  something answers on the pipe, but not with a well-formed version
+//   'missing'       nothing answers on the pipe
+const WELL_FORMED = /^\d{1,6}$/;
+async function serviceCompat() {
+  const v = await serviceCall({ op: 'version' }, { timeoutMs: 3000 });
+  if (!v) return { state: 'missing', version: null };
+  const raw = v.ok && v.data ? v.data.version : undefined;
+  const version = (typeof raw === 'string' || Number.isSafeInteger(raw)) && WELL_FORMED.test(String(raw)) ? String(raw) : null;
+  if (!version) return { state: 'unverifiable', version: null };
+  return { state: version === SERVICE_VERSION ? 'current' : 'outdated', version, info: v.data };
 }
 
+// Every privileged operation. The service runs it only when it is this app's version (above);
+// otherwise, old, unverifiable or missing, it goes through the admin session (Windows' own approval
+// prompt), never to that service. Safe routing here doesn't fix an old service itself: it still runs
+// and other programs on this PC can still ask it; only updating it (Settings) does.
+// After the service is asked, the admin session is used only when the request certainly didn't run:
+// the service refused this user before running anything ('notAllowed', audit TUN-01), or nothing was
+// there to receive it (null: never connected). An answer that never came after the request was sent
+// ('noAnswer') may mean it ran, so it is not tried a second time; 'busy' and 'timedOut' are answers.
+async function privileged(req, opts) {
+  const compat = await serviceCompat();
+  if (compat.state !== 'current') return adminCall(req, opts);
+  const r = await serviceCall(req, opts);
+  if (!r || (r.ok === false && r.code === 'notAllowed')) return adminCall(req, opts);
+  return r;
+}
+
+// For Settings: whether the service is installed and running, its version, and whether it is this
+// app's (only then does it run changes; anything else is offered as an update).
 async function serviceStatus() {
-  const v = await serviceCall({ op: 'version' }, { timeoutMs: 3000 });
-  if (v && v.ok) return { ok: true, data: { installed: true, running: true, ...v.data, current: v.data.version === SERVICE_VERSION } };
+  const c = await serviceCompat();
+  if (c.state === 'current' || c.state === 'outdated') {
+    return { ok: true, data: { ...(c.info || {}), installed: true, running: true, version: c.version, current: c.state === 'current', compat: c.state } };
+  }
+  if (c.state === 'unverifiable') return { ok: true, data: { installed: true, running: true, version: null, current: false, compat: 'unverifiable' } };
   const q = await runPS("$s = Get-Service TuneService -ErrorAction SilentlyContinue; $result = if ($s) { [string]$s.Status } else { '' }");
-  return { ok: true, data: { installed: !!(q.ok && q.data), running: false, state: q.ok ? q.data : null } };
+  const installed = !!(q.ok && q.data);
+  return { ok: true, data: { installed, running: false, version: null, current: false, compat: installed ? 'stopped' : 'missing', state: q.ok ? q.data : null } };
 }
 
 // What this version of Tune expects the service files to be: written by scripts/build-service.cjs
@@ -236,6 +267,6 @@ $result = 'removed'`;
 const uninstallService = () => runElevated(uninstallScript());
 
 module.exports = {
-  SERVICE_VERSION, serviceOpsScript, serviceCall, privileged, serviceStatus, installService, uninstallService,
+  SERVICE_VERSION, serviceOpsScript, serviceCall, serviceCompat, privileged, serviceStatus, installService, uninstallService,
   bundledManifest, validManifest, installScript, uninstallScript,
 };

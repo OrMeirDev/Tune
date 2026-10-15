@@ -14,7 +14,7 @@ function onDiskText(m, t) {
   return '';
 }
 
-export function useCommands({ t, act, results, loadService, setGuide, setAdminUntil, setSettings, onMeasured }) {
+export function useCommands({ t, act, results, loadService, setServiceAttempt, setGuide, setAdminUntil, setSettings, onMeasured }) {
   const { bios, scanDrivers, loadJunk, loadStartup, loadRecs, loadPerf } = results;
 
   const installDrivers = (items) => {
@@ -40,12 +40,19 @@ export function useCommands({ t, act, results, loadService, setGuide, setAdminUn
   const exportHw = (format) => act('export', () => api.exportHardware(format), (file) => t('msg.saved', { file }));
   const adminStart = () => act('admin', () => api.adminStart(), () => t('msg.adminOn'), { admin: true });
   const adminStop = async () => { await api.adminStop(); setAdminUntil(0); };
-  const installService = () => act('service', () => api.installService(), (d) => {
-    loadService();
-    loadPerf();
-    const pawn = { installed: t('msg.pawnInstalled'), present: '', reboot: t('msg.pawnReboot') }[d.pawnio] ?? t('msg.pawnFailed', { e: d.pawnio });
-    return t('msg.svcInstalled') + pawn;
-  }, { admin: true });
+  // Only ever from a click (Settings, the sidebar chip, the update notice): Windows asks for approval
+  // then. Whatever happens, the status is read again from the main process, which says whether the
+  // new service is running and is this version; a cancelled or failed attempt is kept for Settings.
+  const installService = async () => {
+    const r = await act('service', () => api.installService(), (d) => {
+      loadPerf();
+      const pawn = { installed: t('msg.pawnInstalled'), present: '', reboot: t('msg.pawnReboot') }[d.pawnio] ?? t('msg.pawnFailed', { e: d.pawnio });
+      return t('msg.svcInstalled') + pawn;
+    }, { admin: true });
+    setServiceAttempt(r?.ok ? null : { error: r?.error || 'failed' });
+    await loadService();
+    return r;
+  };
   const removeService = () => window.confirm(t('msg.svcRemoveConfirm'))
     && act('service', () => api.uninstallService(), () => { loadService(); return t('msg.svcRemoved'); }, { admin: true });
   const setLang = async (lang) => setSettings(await api.setLanguage(lang));
