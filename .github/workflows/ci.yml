@@ -5,8 +5,9 @@
 # - e2e:     the real app with real DPAPI and this PC's own machine id: licensing against the PoC
 #            server, the locked IPC connection, layout, failed scans shown as not checked
 # - package: the packaged build (unsigned): what it packs, that it ignores development licensing
-#            overrides, and a silent install and uninstall with the background service (this one
-#            changes the machine, which is why it runs only on a throwaway runner)
+#            overrides; the admin session; the installer and the background service: install,
+#            a tampered file refused, an update side by side, a failed update rolled back,
+#            uninstall (these change the machine, which is why they run only on a throwaway runner)
 # What still needs a person or a real PC is listed in docs/windows-validation.md.
 name: CI
 
@@ -87,6 +88,9 @@ jobs:
         run: npm run dist -- --publish never
       - name: packed contents; development licensing overrides ignored
         run: node scripts/ci/packaged-check.cjs
-      - name: silent install and uninstall with the background service
+      - name: admin session (elevated from the command line, answers over its own pipe)
+        run: node scripts/ci/admin-session-check.cjs
+      - name: install, tamper, update, roll back and uninstall the background service
+        if: ${{ !cancelled() }}
         shell: pwsh
         run: ./scripts/ci/installer-check.ps1

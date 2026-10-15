@@ -1,16 +1,18 @@
-// The background service (LocalSystem): calling it, its status, installing and removing it.
-const { spawn } = require('child_process');
+// The background service (LocalSystem): calling it, its status, installing, updating and removing it.
 const fs = require('fs');
-const net = require('net');
-const { PRELUDE, PS, runPS, tempFile } = require('../infra/powershell.cjs');
-const { adminCall, wait } = require('./admin-session.cjs');
+const path = require('path');
+const { PRELUDE, runPS } = require('../infra/powershell.cjs');
+const { adminCall } = require('./admin-session.cjs');
 const { JUNK, OPS_TABLE, STARTUP } = require('./operations.cjs');
+const { pipeCall } = require('./pipe.cjs');
+const { runElevated } = require('./elevated.cjs');
 
 // Tune Service (service/TuneService.cs) runs the same operations as LocalSystem, so once it is
 // installed nothing asks for approval. Without it, Tune falls back to the 10-minute admin session.
-const SERVICE_VERSION = '6';
+// Its version comes from one place (service-version.cjs), compiled into the service too.
+const SERVICE_VERSION = require('./service-version.cjs');
 
-const PIPE = '\\\\.\\pipe\\TuneService';
+const PIPE = 'TuneService';
 
 // The official, signed PawnIO installer, pinned to the exact file checked when this was written.
 const PAWNIO_SETUP = {
@@ -36,45 +38,17 @@ try {
 // Resolves to null when the service isn't there (so the caller can fall back), otherwise to its
 // answer. A busy or momentarily missing pipe is retried briefly before giving up on it.
 async function serviceCall(req, opts = {}) {
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const r = await serviceOnce(req, opts);
-    if (r !== 'retry') return r;
-    await wait(120);
-  }
-  return null;
+  const r = await pipeCall(PIPE, req, opts);
+  return r ? { ...r, via: 'service' } : null;
 }
 
-function serviceOnce(req, { timeoutMs = 30000, onProgress } = {}) {
-  return new Promise((resolve) => {
-    let buf = '';
-    let connected = false;
-    let done = false;
-    const sock = net.connect(PIPE);
-    const finish = (v) => { if (!done) { done = true; clearTimeout(timer); sock.destroy(); resolve(v); } };
-    const timer = setTimeout(() => finish(connected ? { ok: false, error: 'service did not answer' } : null), timeoutMs);
-    sock.setEncoding('utf8');
-    sock.on('connect', () => { connected = true; sock.write(`${JSON.stringify(req)}\n`); });
-    sock.on('error', (e) => finish(connected ? { ok: false, error: String(e.message || e) } : ['ENOENT', 'EBUSY'].includes(e.code) ? 'retry' : null));
-    sock.on('close', () => finish(connected ? { ok: false, error: 'service closed the connection' } : null));
-    sock.on('data', (chunk) => {
-      buf += chunk;
-      for (let i = buf.indexOf('\n'); i >= 0; i = buf.indexOf('\n')) {
-        const line = buf.slice(0, i).trim();
-        buf = buf.slice(i + 1);
-        if (!line) continue;
-        let m;
-        try { m = JSON.parse(line); } catch { continue; }
-        if (m.progress) { if (onProgress) onProgress(m.progress); continue; }
-        finish({ ...m, via: 'service' });
-      }
-    });
-  });
-}
-
-// Every privileged operation: the service if it's running, otherwise the admin session.
+// Every privileged operation: the service if it's running and lets this user ask, otherwise the
+// admin session (Windows' own approval prompt). The service refuses a user who isn't an
+// administrator on this PC (audit TUN-01): that user gets the normal prompt for admin credentials.
 async function privileged(req, opts) {
   const r = await serviceCall(req, opts);
-  return r || adminCall(req, opts);
+  if (r && !(r.ok === false && r.code === 'notAllowed')) return r;
+  return adminCall(req, opts);
 }
 
 async function serviceStatus() {
@@ -84,88 +58,176 @@ async function serviceStatus() {
   return { ok: true, data: { installed: !!(q.ok && q.data), running: false, state: q.ok ? q.data : null } };
 }
 
-// One-off elevated script (one UAC prompt, then it exits), for installing or removing the service.
-function runElevated(body, { timeoutMs = 10 * 60 * 1000, onProgress } = {}) {
-  const out = tempFile('json');
-  const prog = tempFile('progress');
-  const script = tempFile('ps1');
-  fs.writeFileSync(script, '﻿' + `${PRELUDE}$progressFile = '${prog}'
-function Report-Progress($o) { try { [IO.File]::WriteAllText($progressFile, ($o | ConvertTo-Json -Compress)) } catch {} }
-try {
-${body}
-$payload = @{ ok = $true; data = $result } } catch { $payload = @{ ok = $false; error = $_.Exception.Message } }
-[IO.File]::WriteAllText('${out}', ($payload | ConvertTo-Json -Depth 8 -Compress), (New-Object Text.UTF8Encoding $false))`, 'utf8');
-  return new Promise((resolve) => {
-    const child = spawn(PS, ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
-      `try { $p = Start-Process -FilePath '${PS}' -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File','"${script}"' -Verb RunAs -WindowStyle Hidden -Wait -PassThru; exit $p.ExitCode } catch { exit 1223 }`], { windowsHide: true });
-    const timer = setTimeout(() => child.kill(), timeoutMs);
-    let last = '';
-    const poll = setInterval(() => {
-      try { const s = fs.readFileSync(prog, 'utf8'); if (s && s !== last) { last = s; if (onProgress) onProgress(JSON.parse(s)); } } catch { /* not yet */ }
-    }, 400);
-    child.on('error', (e) => {
-      clearTimeout(timer);
-      clearInterval(poll);
-      for (const f of [out, prog, script]) fs.rm(f, { force: true }, () => {});
-      resolve({ ok: false, error: `could not start PowerShell: ${e.message}` });
-    });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      clearInterval(poll);
-      let res;
-      try { res = JSON.parse(fs.readFileSync(out, 'utf8').replace(/^﻿/, '')); } catch { res = code === 1223 ? { ok: false, error: 'cancelled' } : { ok: false, error: `no result (exit ${code})` }; }
-      for (const f of [out, prog, script]) fs.rm(f, { force: true }, () => {});
-      resolve(res);
-    });
-  });
+// What this version of Tune expects the service files to be: written by scripts/build-service.cjs
+// into the app itself (service-manifest.json), next to this file.
+function bundledManifest() {
+  try {
+    const m = JSON.parse(fs.readFileSync(path.join(__dirname, 'service-manifest.json'), 'utf8'));
+    return m && typeof m.version === 'string' && m.files && typeof m.files === 'object' ? m : null;
+  } catch { return null; }
 }
 
-// Copies the service into Program Files (only administrators can change it there), registers it to
-// start with Windows and restart if it stops, and installs the official PawnIO driver (CPU and
-// motherboard sensors) if it isn't there yet (downloaded into the protected folder and checked first).
-function installService(srcDir, onProgress) {
-  return runElevated(`
-$src = '${String(srcDir).replace(/'/g, "''")}'
-$dst = Join-Path $env:ProgramFiles 'Tune Service'
-foreach ($f in @('TuneService.exe', 'ops.ps1', 'LibreHardwareMonitorLib.dll')) { if (-not (Test-Path -LiteralPath (Join-Path $src $f))) { throw "missing $f" } }
-$files = @(Get-ChildItem -LiteralPath $src -File | Where-Object { $_.Extension -in '.exe', '.dll', '.ps1', '.txt' } | ForEach-Object { $_.Name })
+const psString = (s) => `'${String(s).replace(/'/g, "''")}'`;
+
+// The folder the service lives in: only administrators and SYSTEM can change it, users can read and
+// run it. Set explicitly (no inherited entries) and checked afterwards.
+const PROTECT_PS = `
+$adminsSid = 'S-1-5-32-544'; $systemSid = 'S-1-5-18'; $trustedInstaller = 'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+function Protect-Folder([string]$path) {
+  $acl = New-Object Security.AccessControl.DirectorySecurity
+  $acl.SetAccessRuleProtection($true, $false)
+  $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier($adminsSid)))
+  $flags = [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit'
+  foreach ($e in @(@($adminsSid, 'FullControl'), @($systemSid, 'FullControl'), @('S-1-5-32-545', 'ReadAndExecute'))) {
+    $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule((New-Object Security.Principal.SecurityIdentifier($e[0])), [Security.AccessControl.FileSystemRights]$e[1], $flags, [Security.AccessControl.PropagationFlags]::None, [Security.AccessControl.AccessControlType]::Allow)))
+  }
+  Set-Acl -LiteralPath $path -AclObject $acl
+}
+function Assert-Protected([string]$path) {
+  $write = [Security.AccessControl.FileSystemRights]'WriteData, AppendData, WriteExtendedAttributes, WriteAttributes, Delete, DeleteSubdirectoriesAndFiles, ChangePermissions, TakeOwnership'
+  foreach ($r in (Get-Acl -LiteralPath $path).Access) {
+    if ($r.AccessControlType -ne 'Allow' -or -not ($r.FileSystemRights -band $write)) { continue }
+    $sid = try { $r.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value } catch { [string]$r.IdentityReference }
+    if ($sid -notin @($adminsSid, $systemSid, $trustedInstaller)) { throw "the service folder can be changed by $sid" }
+  }
+}`;
+
+// Asks the service for its version over its pipe (as the elevated installer): true when the expected
+// version answers within $seconds.
+const HEALTH_PS = `
+function Test-ServiceAnswers([string]$version, [int]$seconds) {
+  $end = (Get-Date).AddSeconds($seconds)
+  while ((Get-Date) -lt $end) {
+    $c = $null
+    try {
+      $c = New-Object IO.Pipes.NamedPipeClientStream('.', '${PIPE}', [IO.Pipes.PipeDirection]::InOut, [IO.Pipes.PipeOptions]::Asynchronous, [Security.Principal.TokenImpersonationLevel]::Identification)
+      $c.Connect(2000)
+      $bytes = [Text.Encoding]::UTF8.GetBytes("{""op"":""version""}\`n"); $c.Write($bytes, 0, $bytes.Length); $c.Flush()
+      $v = (Read-TuneLine $c 5000) | ConvertFrom-Json
+      if ($v.ok -and [string]$v.data.version -eq $version) { return $true }
+    } catch {} finally { if ($c) { $c.Dispose() } }
+    Start-Sleep -Milliseconds 500
+  }
+  return $false
+}`;
+
+// Installs or updates the service (audit TUN-02 and TUN-12):
+// 1. the files go into a new folder for this version inside Program Files\Tune Service (only
+//    administrators can change it), and each copy is checked there against the manifest built with
+//    this version of Tune before anything uses it: a file changed in the per-user install folder is
+//    refused, and the running service is left as it was;
+// 2. the service is switched to the new folder and must answer with the new version within 30 s;
+//    otherwise it is switched back to the previous version (or removed if there was none) and the
+//    new folder is deleted, so a failed update never leaves Tune without a working service;
+// 3. only then are older folders removed (the previous one is kept for one more update).
+// It also installs the official PawnIO driver (CPU sensors) if it isn't there yet (downloaded into
+// the protected folder and checked first).
+// A manifest names only plain file names, each with a SHA-256, and a whole-number version.
+const validManifest = (m) => !!m && /^\d+$/.test(String(m.version)) && !!m.files && typeof m.files === 'object'
+  && Object.keys(m.files).length > 0
+  && Object.entries(m.files).every(([n, h]) => /^[A-Za-z0-9._-]+$/.test(n) && !/^\.+$/.test(n) && /^[0-9A-F]{64}$/.test(h));
+
+function installService(srcDir, onProgress, { manifest = bundledManifest() } = {}) {
+  if (!manifest) return Promise.resolve({ ok: false, error: 'this build of Tune has no service manifest (npm run build:service)' });
+  if (!validManifest(manifest)) return Promise.resolve({ ok: false, error: 'the service manifest is not valid' });
+  return runElevated(installScript(srcDir, manifest), { onProgress });
+}
+
+// The elevated body of installService (the pipe helpers it uses, such as Read-TuneLine, come with
+// runElevated's script).
+function installScript(srcDir, manifest) {
+  const tag = `v${manifest.version}-${String(manifest.id || '').slice(0, 12)}`.replace(/[^A-Za-z0-9.-]/g, '');
+  const expected = Object.keys(manifest.files).map((n) => `@(${psString(n)}, ${psString(manifest.files[n])})`).join(', ');
+  return `${PROTECT_PS}${HEALTH_PS}
+$src = ${psString(srcDir)}
+$root = Join-Path $env:ProgramFiles 'Tune Service'
+# a new folder for every install, so the running version's folder is never touched (rollback target)
+$dst = Join-Path $root (${psString(tag)} + '-' + (Get-Date -Format 'yyyyMMddHHmmss'))
+$expected = @(${expected})
 Report-Progress @{ phase = 'service' }
+New-Item -ItemType Directory -Path $root -Force | Out-Null
+Protect-Folder $root
+Assert-Protected $root
+if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Recurse -Force }
+New-Item -ItemType Directory -Path $dst | Out-Null
+foreach ($e in $expected) {
+  $to = Join-Path $dst $e[0]
+  Copy-Item -LiteralPath (Join-Path $src $e[0]) -Destination $to
+  if ((Get-FileHash -LiteralPath $to -Algorithm SHA256).Hash -ne $e[1]) {
+    Remove-Item -LiteralPath $dst -Recurse -Force
+    throw "the service file $($e[0]) does not match this version of Tune; nothing was changed"
+  }
+}
+Assert-Protected $dst
 $svc = Get-Service TuneService -ErrorAction SilentlyContinue
-if ($svc -and $svc.Status -ne 'Stopped') { Stop-Service TuneService -Force; $svc.WaitForStatus('Stopped', '00:00:20') }
-New-Item -ItemType Directory -Path $dst -Force | Out-Null
-# A fresh folder each time, so files from an older version don't linger.
-Get-ChildItem -LiteralPath $dst -File -ErrorAction SilentlyContinue | Remove-Item -Force
-foreach ($f in $files) { Copy-Item -LiteralPath (Join-Path $src $f) -Destination (Join-Path $dst $f) -Force }
+$previous = if ($svc) { [string](Get-CimInstance Win32_Service -Filter "Name='TuneService'").PathName } else { $null }
 $bin = '"' + (Join-Path $dst 'TuneService.exe') + '"'
+if ($svc -and $svc.Status -ne 'Stopped') { Stop-Service TuneService -Force; $svc.WaitForStatus('Stopped', '00:00:20') }
 if (-not $svc) {
   New-Service -Name TuneService -BinaryPathName $bin -DisplayName 'Tune Service' -StartupType Automatic -Description 'Lets Tune install drivers and apply settings without a prompt each time, and reads hardware temperatures.' | Out-Null
-} else { Set-Service -Name TuneService -StartupType Automatic }
-sc.exe failure TuneService reset= 86400 actions= restart/5000/restart/5000/restart/60000 | Out-Null
+} else {
+  & sc.exe config TuneService binPath= $bin start= auto | Out-Null
+  if ($LASTEXITCODE) { throw "could not point the service at the new version (sc $LASTEXITCODE)" }
+}
+& sc.exe failure TuneService reset= 86400 actions= restart/5000/restart/5000/restart/60000 | Out-Null
+Report-Progress @{ phase = 'start' }
+try { Start-Service TuneService } catch {}
+if (-not (Test-ServiceAnswers ${psString(manifest.version)} 30)) {
+  try { Stop-Service TuneService -Force -ErrorAction SilentlyContinue } catch {}
+  if ($previous) {
+    & sc.exe config TuneService binPath= $previous | Out-Null
+    try { Start-Service TuneService } catch {}
+    $kept = 'the previous version was restored'
+  } else {
+    & sc.exe delete TuneService | Out-Null
+    $kept = 'it was not installed'
+  }
+  Start-Sleep -Milliseconds 500
+  Remove-Item -LiteralPath $dst -Recurse -Force -ErrorAction SilentlyContinue
+  throw "the new background service did not start; $kept"
+}
+# Older versions go; the previous one stays for one more update. Files of the first layout (directly
+# in the folder, service version 6 and before) go once the new version answers.
+foreach ($d in @(Get-ChildItem -LiteralPath $root -Directory)) {
+  if ($d.FullName -eq $dst -or ($previous -and $previous.Contains($d.FullName + '\\'))) { continue }
+  Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction SilentlyContinue
+}
+Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Name -ne 'PawnIO_setup.exe' } | Remove-Item -Force -ErrorAction SilentlyContinue
+# PawnIO (CPU sensors) comes after the service answers: a download or driver problem is reported in
+# the result, and never leaves the service itself stopped.
 $pawn = 'present'
 if (-not (Get-ItemProperty 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\PawnIO' -ErrorAction SilentlyContinue)) {
   Report-Progress @{ phase = 'pawnio' }
-  $setup = Join-Path $dst 'PawnIO_setup.exe'
-  Invoke-WebRequest -UseBasicParsing '${PAWNIO_SETUP.url}' -OutFile $setup
-  if ((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash -ne '${PAWNIO_SETUP.sha256}') { Remove-Item -LiteralPath $setup -Force; throw 'the PawnIO download does not match the official file' }
-  if ((Get-AuthenticodeSignature -LiteralPath $setup).Status -ne 'Valid') { Remove-Item -LiteralPath $setup -Force; throw 'the PawnIO signature is not valid' }
-  $p = Start-Process -FilePath $setup -ArgumentList '-install', '-silent' -Wait -PassThru
+  $setup = Join-Path $root 'PawnIO_setup.exe'
+  try {
+    Invoke-WebRequest -UseBasicParsing '${PAWNIO_SETUP.url}' -OutFile $setup
+    if ((Get-FileHash -LiteralPath $setup -Algorithm SHA256).Hash -ne '${PAWNIO_SETUP.sha256}') { throw 'the PawnIO download does not match the official file' }
+    if ((Get-AuthenticodeSignature -LiteralPath $setup).Status -ne 'Valid') { throw 'the PawnIO signature is not valid' }
+    $p = Start-Process -FilePath $setup -ArgumentList '-install', '-silent' -Wait -PassThru
+    $pawn = switch ($p.ExitCode) { 0 { 'installed' } 3010 { 'reboot' } default { "failed ($($p.ExitCode))" } }
+  } catch { $pawn = "failed: $($_.Exception.Message)" }
   Remove-Item -LiteralPath $setup -Force -ErrorAction SilentlyContinue
-  $pawn = switch ($p.ExitCode) { 0 { 'installed' } 3010 { 'reboot' } default { "failed ($($p.ExitCode))" } }
 }
-Report-Progress @{ phase = 'start' }
-Start-Service TuneService
-$result = @{ service = 'running'; pawnio = $pawn }`, { onProgress });
+$result = @{ service = 'running'; version = ${psString(manifest.version)}; pawnio = $pawn }`;
 }
 
-// Removes the service and its folder. PawnIO stays (it has its own entry in Windows' app list).
-const uninstallService = () => runElevated(`
+// Removes the service and its folder, and says so when it couldn't (the uninstaller reports that).
+// PawnIO stays (it has its own entry in Windows' app list).
+const uninstallScript = () => `
 $svc = Get-Service TuneService -ErrorAction SilentlyContinue
 if ($svc) {
   if ($svc.Status -ne 'Stopped') { Stop-Service TuneService -Force; $svc.WaitForStatus('Stopped', '00:00:20') }
-  sc.exe delete TuneService | Out-Null
+  & sc.exe delete TuneService | Out-Null
+  if ($LASTEXITCODE -and $LASTEXITCODE -ne 1060) { throw "the service could not be removed (sc $LASTEXITCODE)" }
 }
-Start-Sleep -Milliseconds 500
-Remove-Item -LiteralPath (Join-Path $env:ProgramFiles 'Tune Service') -Recurse -Force -ErrorAction SilentlyContinue
-$result = 'removed'`);
+for ($i = 0; $i -lt 40 -and (Get-Service TuneService -ErrorAction SilentlyContinue); $i++) { Start-Sleep -Milliseconds 250 }
+if (Get-Service TuneService -ErrorAction SilentlyContinue) { throw 'the service is still registered' }
+$root = Join-Path $env:ProgramFiles 'Tune Service'
+if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
+$result = 'removed'`;
+const uninstallService = () => runElevated(uninstallScript());
 
-module.exports = { SERVICE_VERSION, serviceOpsScript, serviceCall, privileged, serviceStatus, installService, uninstallService };
+module.exports = {
+  SERVICE_VERSION, serviceOpsScript, serviceCall, privileged, serviceStatus, installService, uninstallService,
+  bundledManifest, validManifest, installScript, uninstallScript,
+};

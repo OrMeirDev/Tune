@@ -225,6 +225,8 @@ if (serviceArg) {
     const install = serviceArg === '--install-service';
     const r = install ? await sys.installService(serviceDir()) : await sys.uninstallService();
     if (r.ok) addHistory('service', install ? { installed: true, pawnio: r.data.pawnio, at: 'setup' } : { installed: false });
+    // the result, for whoever ran it (seen when its output is redirected, as in CI)
+    try { process.stdout.write(`${JSON.stringify(r)}\n`); } catch { /* no console */ }
     app.exit(r.ok ? 0 : 1);
   });
 } else if (!app.requestSingleInstanceLock()) {

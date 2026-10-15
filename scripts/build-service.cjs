@@ -1,8 +1,11 @@
 // Builds the background service into service/bin (bundled with the app as resources/service):
 // - LibreHardwareMonitor 0.9.6 (official .NET Framework release, pinned by hash): only the library
 //   and the files it needs, plus its MPL-2.0 license;
-// - TuneService.exe, compiled with the C# compiler that ships with Windows (.NET Framework 4.8);
-// - ops.ps1, generated from the same operations Tune runs through the admin session.
+// - TuneService.exe, compiled with the C# compiler that ships with Windows (.NET Framework 4.8), with
+//   its version from electron/privilege/service-version.cjs (the one the app expects);
+// - ops.ps1, generated from the same operations Tune runs through the admin session;
+// - electron/privilege/service-manifest.json (packed into the app): the SHA-256 of every file above,
+//   which the elevated installer checks each copy against inside Program Files (audit TUN-02).
 const { execFileSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
@@ -21,6 +24,25 @@ const LHM = {
     'System.Buffers.dll', 'System.Memory.dll', 'System.Numerics.Vectors.dll', 'System.Runtime.CompilerServices.Unsafe.dll',
     'System.Security.AccessControl.dll', 'System.Security.Principal.Windows.dll', 'System.Threading.AccessControl.dll'],
 };
+
+const version = require('../electron/privilege/service-version.cjs');
+
+// The C# side of the one version number.
+const buildInfo = (v) => {
+  if (!/^\d+$/.test(v)) throw new Error(`serviceVersion must be a whole number, not ${v}`);
+  return `namespace Tune { static class BuildInfo { public const string Version = "${v}"; } }\n`;
+};
+
+// Every file the service folder gets, with its SHA-256 (upper-case hex, as Get-FileHash prints it),
+// and an id for this exact set (a new folder per build in Program Files).
+function manifestOf(dir, v) {
+  const files = {};
+  for (const name of fs.readdirSync(dir).filter((n) => /\.(exe|dll|ps1|txt)$/i.test(n)).sort()) {
+    files[name] = crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, name))).digest('hex').toUpperCase();
+  }
+  const id = crypto.createHash('sha256').update(JSON.stringify(files)).digest('hex').slice(0, 12);
+  return { version: v, id, files };
+}
 
 async function download(url, sha256) {
   const res = await fetch(url);
@@ -42,14 +64,22 @@ async function fetchLibreHardwareMonitor() {
 }
 
 (async () => {
+  if (require.main !== module) return;
   fs.mkdirSync(out, { recursive: true });
   // Left over from the first version, which read the CPU through its own PawnIO module.
   for (const f of ['IntelMSR.bin', 'PawnIO-modules-COPYING.txt']) fs.rmSync(path.join(out, f), { force: true });
   await fetchLibreHardwareMonitor();
   const csc = path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
+  const gen = fs.mkdtempSync(path.join(os.tmpdir(), 'tune-service-'));
+  fs.writeFileSync(path.join(gen, 'BuildInfo.g.cs'), buildInfo(version));
   execFileSync(csc, ['/nologo', '/optimize+', '/target:exe', '/platform:anycpu', `/out:${path.join(out, 'TuneService.exe')}`,
     '/r:System.ServiceProcess.dll', '/r:System.Web.Extensions.dll', '/r:System.Core.dll',
-    ...LHM.files.map((f) => `/r:${path.join(out, f)}`), path.join(root, 'service', 'TuneService.cs')], { stdio: 'inherit' });
+    ...LHM.files.map((f) => `/r:${path.join(out, f)}`), path.join(root, 'service', 'TuneService.cs'), path.join(gen, 'BuildInfo.g.cs')], { stdio: 'inherit' });
+  fs.rmSync(gen, { recursive: true, force: true });
   fs.writeFileSync(path.join(out, 'ops.ps1'), '\ufeff' + require('../electron/system.cjs').serviceOpsScript(), 'utf8');
-  console.log('service built:', fs.readdirSync(out).join(', '));
+  const manifest = manifestOf(out, version);
+  fs.writeFileSync(path.join(root, 'electron', 'privilege', 'service-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  console.log(`service ${version} built (${manifest.id}):`, Object.keys(manifest.files).join(', '));
 })().catch((e) => { console.error(e.message || e); process.exit(1); });
+
+module.exports = { buildInfo, manifestOf };

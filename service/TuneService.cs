@@ -45,7 +45,9 @@ namespace Tune
 
     public class TuneService : ServiceBase
     {
-        public const string Version = "6";
+        // From electron/privilege/service-version.cjs (scripts/build-service.cjs writes BuildInfo), the
+        // same number the app expects, so the two can't drift.
+        public const string Version = BuildInfo.Version;
         // Another name only for testing a new build next to the installed service (--console --pipe X).
         static string PipeName = "TuneService";
         const int MaxRequest = 64 * 1024;

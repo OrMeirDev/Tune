@@ -34,7 +34,11 @@ test('every generated PowerShell script parses', { skip: process.platform !== 'w
   const ops = require(path.join(EL, 'privilege', 'operations.cjs'));
   scripts.set('ops table (admin operations)', `${ops.STARTUP}${ops.JUNK}${ops.OPS_TABLE()}`);
   scripts.set('service ops.ps1', service.serviceOpsScript());
-  scripts.set('admin session helper', require(path.join(EL, 'privilege', 'admin-session.cjs')).adminHelper('C:\Temp\tune-admin'));
+  scripts.set('admin session helper', require(path.join(EL, 'privilege', 'admin-session.cjs')).adminHelper('TuneAdmin-0123456789abcdef01234567', 4242));
+  const { oneShotScript } = require(path.join(EL, 'privilege', 'elevated.cjs'));
+  const manifest = { version: '6', id: 'abcdef012345', files: { 'TuneService.exe': 'A'.repeat(64), 'ops.ps1': 'B'.repeat(64) } };
+  scripts.set('service install (elevated)', oneShotScript('TuneElevated-x', service.installScript("C:\\Users\\O'Brien\\Tune\\resources\\service", manifest)));
+  scripts.set('service removal (elevated)', oneShotScript('TuneElevated-x', service.uninstallScript()));
 
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tune-ps-parse-'));
   const names = [...scripts.keys()];
@@ -44,7 +48,7 @@ test('every generated PowerShell script parses', { skip: process.platform !== 'w
   ], { encoding: 'utf8' });
   fs.rmSync(dir, { recursive: true, force: true });
   const results = [].concat(JSON.parse(out));
-  assert.ok(names.length >= 13, `only ${names.length} scripts captured`);
+  assert.ok(names.length >= 15, `only ${names.length} scripts captured`);
   assert.equal(results.length, names.length);
   for (const r of results) assert.deepEqual(r.errors, [], `${names[r.i]}:\n${r.errors.join('\n')}`);
 });
