@@ -1,15 +1,27 @@
-# Every push and pull request: the unit, architecture, IPC and PowerShell tests, and the renderer
-# build, on Windows (several tests run Windows PowerShell). Releases are still built and published by
-# the owner; this only reports whether a change is safe to merge.
+# Every push to main or a feature branch, and every pull request, on disposable Windows runners
+# (several checks need Windows: PowerShell, DPAPI, the installer and the background service).
+# Releases are still built and published by the owner; this only reports whether a change is safe.
+# - test:    unit, architecture, IPC and PowerShell tests, the renderer build, main-process syntax
+# - e2e:     the real app with real DPAPI and this PC's own machine id: licensing against the PoC
+#            server, the locked IPC connection, layout, failed scans shown as not checked
+# - package: the packaged build (unsigned): what it packs, that it ignores development licensing
+#            overrides, and a silent install and uninstall with the background service (this one
+#            changes the machine, which is why it runs only on a throwaway runner)
+# What still needs a person or a real PC is listed in docs/windows-validation.md.
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'claude/**']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -27,3 +39,54 @@ jobs:
       - name: main-process syntax
         shell: pwsh
         run: Get-ChildItem electron -Recurse -Filter *.cjs | ForEach-Object { node --check $_.FullName; if ($LASTEXITCODE) { exit 1 } }
+
+  e2e:
+    name: real app (Windows, DPAPI)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-fund --no-audit
+      - name: licensing (real DPAPI and machine id, against the PoC server)
+        run: npm run e2e:licensing
+      - name: locked IPC connection
+        if: ${{ !cancelled() }}
+        run: npm run e2e:ipc-probes
+      - name: layout (en/he, smallest and typical window)
+        if: ${{ !cancelled() }}
+        run: npm run e2e:layout
+      - name: failed scans are never shown as fine
+        if: ${{ !cancelled() }}
+        run: npm run e2e:scan-failure
+      - name: screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: e2e/output
+          retention-days: 7
+
+  package:
+    name: packaged build, installer and service (disposable runner)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-fund --no-audit
+      - name: build (service, renderer, unsigned installer; never published)
+        run: npm run dist -- --publish never
+      - name: packed contents; development licensing overrides ignored
+        run: node scripts/ci/packaged-check.cjs
+      - name: silent install and uninstall with the background service
+        shell: pwsh
+        run: ./scripts/ci/installer-check.ps1

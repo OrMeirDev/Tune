@@ -151,6 +151,14 @@ run.guard(async () => {
   check('3 the gated request now passes the gate (and stops at the scan check: nothing runs)', passes?.error !== 'not entitled', passes);
   const nothingLeaks = await js(`window.tune.licenseStatus().then((s) => JSON.stringify(s))`);
   check('3 the window sees no token, key or certificate', !/ownerToken|PRIVATE KEY|signature|idempotency/.test(nothingLeaks), nothingLeaks.length);
+  // On Windows the file is DPAPI-protected: nothing in it is readable (elsewhere it is the labelled
+  // test storage, which proves nothing about DPAPI, so it isn't checked)
+  if (process.platform === 'win32') {
+    const stored = fs.readFileSync(path.join(work, 'profile', 'license.bin'));
+    const body = stored.subarray('TUNE-LICENSE/1\n'.length).toString('latin1');
+    const readable = ['PRIVATE KEY', 'tune-license', 'tune-pro', 'lic_', 'dev_', 'certificate', 'signature'].filter((x) => body.includes(x));
+    check('3 Windows: license.bin is DPAPI-protected, nothing in it is readable', stored.subarray(0, 15).toString() === 'TUNE-LICENSE/1\n' && readable.length === 0, { bytes: stored.length, readable });
+  }
   await shot('3-en-active.png');
 
   // 4) the server goes away
