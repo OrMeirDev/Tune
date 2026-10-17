@@ -1,15 +1,29 @@
-# Every push and pull request: the unit, architecture, IPC and PowerShell tests, and the renderer
-# build, on Windows (several tests run Windows PowerShell). Releases are still built and published by
-# the owner; this only reports whether a change is safe to merge.
+# Every push to main or a feature branch, and every pull request, on disposable Windows runners
+# (several checks need Windows: PowerShell, DPAPI, the installer and the background service).
+# Releases are still built and published by the owner; this only reports whether a change is safe.
+# - test:    unit, architecture, IPC and PowerShell tests, the renderer build, main-process syntax
+# - e2e:     the real app with real DPAPI and this PC's own machine id: licensing against the PoC
+#            server, the locked IPC connection, layout, failed scans shown as not checked
+# - package: the packaged build (unsigned): what it packs, that it ignores development licensing
+#            overrides; the service's deadlines (a console copy); the admin session; the installer
+#            and the background service: install, who may ask for a change (an administrator and a
+#            standard user), a tampered file refused, an update side by side, a failed update rolled
+#            back, uninstall (these change the machine, which is why they run only on a throwaway runner)
+# What still needs a person or a real PC is listed in docs/windows-validation.md.
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, 'claude/**']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
@@ -27,3 +41,110 @@ jobs:
       - name: main-process syntax
         shell: pwsh
         run: Get-ChildItem electron -Recurse -Filter *.cjs | ForEach-Object { node --check $_.FullName; if ($LASTEXITCODE) { exit 1 } }
+
+  e2e:
+    name: real app (Windows, DPAPI)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-fund --no-audit
+      - name: licensing (real DPAPI and machine id, against the PoC server)
+        run: npm run e2e:licensing
+      - name: licensing at start-up (new profiles, timed; a slow and a failing identity read)
+        if: ${{ !cancelled() }}
+        run: npm run e2e:licensing-startup
+      - name: locked IPC connection
+        if: ${{ !cancelled() }}
+        run: npm run e2e:ipc-probes
+      - name: layout (en/he, smallest and typical window)
+        if: ${{ !cancelled() }}
+        run: npm run e2e:layout
+      - name: failed scans are never shown as fine
+        if: ${{ !cancelled() }}
+        run: npm run e2e:scan-failure
+      - name: an older background service (notice, Later, cancelled, failed and done update; changes never sent to it)
+        if: ${{ !cancelled() }}
+        run: npm run e2e:service-update
+      - name: screenshots
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: e2e/output
+          retention-days: 7
+
+  package:
+    name: packaged build, installer and service (disposable runner)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-fund --no-audit
+      # The release is signed the way a real certificate would sign it (audit TUN-09), with a
+      # throwaway self-signed one made here and trusted on this runner only; it never leaves it.
+      - name: a throwaway code-signing certificate (rehearses the signed release)
+        shell: pwsh
+        run: |
+          $c = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Tune CI throwaway signing' -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(1)
+          $pw = [guid]::NewGuid().ToString()
+          $pfx = Join-Path $env:RUNNER_TEMP 'ci-signing.pfx'
+          Export-PfxCertificate -Cert $c -FilePath $pfx -Password (ConvertTo-SecureString $pw -AsPlainText -Force) | Out-Null
+          foreach ($name in 'Root', 'TrustedPublisher') {
+            $store = New-Object Security.Cryptography.X509Certificates.X509Store($name, 'LocalMachine'); $store.Open('ReadWrite'); $store.Add($c); $store.Close()
+          }
+          "CSC_LINK=$pfx" >> $env:GITHUB_ENV
+          "CSC_KEY_PASSWORD=$pw" >> $env:GITHUB_ENV
+          "TUNE_CI_SIGNER=$($c.Thumbprint)" >> $env:GITHUB_ENV
+      - name: build (service, renderer, installer signed with the throwaway certificate; never published)
+        run: npm run dist -- --publish never
+      - name: packed contents; development licensing overrides ignored
+        run: node scripts/ci/packaged-check.cjs
+      - name: service deadlines (a console copy with a hanging test operation)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: ./scripts/ci/service-deadlines-check.ps1
+      - name: service containment (a test build that makes each native step fail in turn)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: ./scripts/ci/service-containment-check.ps1
+      - name: admin session (elevated from the command line, answers over its own pipe)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/admin-session-check.cjs
+      - name: install, tamper, update, roll back and uninstall the background service
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: ./scripts/ci/installer-check.ps1
+
+  upgrade:
+    name: upgrade from the published 1.3.1 (disposable runner)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-fund --no-audit
+      - name: the published 1.3.1 installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download v1.3.1 --repo ${{ github.repository }} --pattern 'Tune-Setup-*.exe' --dir old
+      - name: build (unsigned; never published)
+        run: npm run dist -- --publish never
+      - name: install 1.3.1, then this build over it
+        shell: pwsh
+        run: ./scripts/ci/upgrade-check.ps1

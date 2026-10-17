@@ -84,11 +84,12 @@ function cpuLoadNow() {
   return Math.round(100 * (1 - (sum.idle - prev.idle) / (sum.total - prev.total)));
 }
 
-// Only the service's sensors (and the load): quick enough to refresh every couple of seconds while
-// a page shows them.
+// Only the service's sensors (and the load and memory in use, which Windows tells any program):
+// quick enough to refresh every couple of seconds while a page shows them.
 async function sensors() {
   const load = cpuLoadNow();
-  return { ok: true, data: { ...liveCpu(await serviceCall({ op: 'sensors' }, { timeoutMs: 5000 })), cpuLoad: load } };
+  const ram = { ramUsedBytes: os.totalmem() - os.freemem(), ramTotalBytes: os.totalmem() };
+  return { ok: true, data: { ...liveCpu(await serviceCall({ op: 'sensors' }, { timeoutMs: 5000 })), cpuLoad: load, ...ram } };
 }
 
 // Hardware sensors come from the background service (LibreHardwareMonitor); load, memory and the

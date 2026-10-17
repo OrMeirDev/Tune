@@ -9,6 +9,7 @@ const V = require('../electron/ipc/validate.cjs');
 const { isTrustedSender, dispatch, REFUSED, INVALID } = require('../electron/ipc/guard.cjs');
 const { createOffers } = require('../electron/ipc/offers.cjs');
 const { createChannels } = require('../electron/ipc/channels.cjs');
+const { createEntitlements, FEATURE_OF, GATED } = require('../electron/licensing/entitlements.cjs');
 
 const PAGE = 'file:///C:/Program%20Files/Tune/resources/app.asar/dist/index.html';
 const mainFrame = { url: PAGE };
@@ -17,8 +18,9 @@ const ok = (data) => ({ ok: true, data });
 const GUID1 = '11111111-2222-3333-4444-555555555555';
 const GUID2 = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 
-// a world where the main process' own scans found these things
-function world() {
+// a world where the main process' own scans found these things; `policy` and `license` set the
+// entitlement check (the shipped policy, 'open', by default)
+function world({ policy = 'open', license = () => ({ state: 'none', features: [] }) } = {}) {
   const calls = [];
   const rec = (name, result = ok('done')) => (...args) => { calls.push([name, ...args]); return Promise.resolve(result); };
   const sys = {
@@ -36,12 +38,26 @@ function world() {
     junkClean: rec('junkClean', ok({ freed: 1, skipped: 0 })),
     startupToggle: rec('startupToggle'),
     applyRecommendation: rec('applyRecommendation'),
+    createRestorePoint: rec('createRestorePoint', ok('created')),
+    diskFree: rec('diskFree', { drive: 'C:', freeBytes: 40e9 }),
+    restMeasure: rec('restMeasure', ok([{ metric: 'restCpuLoad', value: 4 }])),
+    bootInfo: rec('bootInfo', ok({ fastStartup: true, systemMedia: 'ssd', lastBootType: 'full', timings: 'ok', records: [{ metric: 'bootToDesktopMs', value: 20000 }], current: { bootToDesktopMs: { value: 20000 } } })),
   };
+  const measured = [];
   const history = [];
   const opened = [];
   const d = {
     sys, offers: createOffers(), warmOr: (_k, fn) => fn(), progressTo: () => () => {},
-    history: { add: (a, x) => history.push([a, x]), read: () => history },
+    history: { add: (a, x) => { history.push([a, x]); return `id-${history.length}`; }, read: () => history },
+    measurements: {
+      add: (r) => measured.push(...[].concat(r)),
+      addDiskPair: (b, a, id) => { measured.push(['pair', b, a, id]); return { state: 'better', delta: 1 }; },
+      view: (actions) => ({ records: measured, latest: {}, changes: actions }),
+    },
+    exportMeasurements: () => ok('C:\\dl\\Tune-measurements.csv'),
+    licensing: Object.fromEntries(['status', 'startOwner', 'confirmOwner', 'activate', 'recover', 'retry', 'refresh', 'reset']
+      .map((m) => [m, (...args) => { calls.push([`licensing.${m}`, ...args]); return ok({ license: { state: 'none' } }); }])),
+    entitlements: (() => { const e = createEntitlements({ policy, license }); return { check: e.check, featureOf: (c) => FEATURE_OF[c] || null }; })(),
     settings: { get: () => ({ saveDir: 'C:\\dl' }), save: () => {}, pickDir: () => {} },
     shell: { openPath: (p) => opened.push(p), showItemInFolder: (p) => opened.push(p), openExternal: (u) => opened.push(u) },
     cache: { read: () => ({}), write: () => {} },
@@ -53,7 +69,7 @@ function world() {
   const trusted = (e) => isTrustedSender(e, { webContents, pageUrl: PAGE });
   const call = (name, ...args) => dispatch(channels[name], ev, args, trusted);
   const scanned = async () => { for (const c of ['hw:scan', 'drv:updates', 'drv:gpu', 'bios:check', 'junk:scan', 'startup:list', 'rec:list']) await call(c); calls.length = 0; };
-  return { calls, history, opened, channels, call, scanned, trusted };
+  return { calls, history, opened, channels, call, scanned, trusted, measured, sys };
 }
 
 test('shape rules', () => {
@@ -100,6 +116,8 @@ test('malformed requests run nothing', async () => {
     ['cache:set', ['secrets', 1]], ['cache:set', ['hw', 'x'.repeat(5_000_001)]],
     ['link:open', ['http://example.com']], ['link:open', ['javascript:alert(1)']], ['link:open', ['https://user:pw@evil.example/']],
     ['bios:download', [{ url: 'https://evil.example/b.zip' }]], ['drv:gpuInstaller', [42]],
+    ['measure:take', ['benchmark']], ['measure:take', [{ metric: 'restCpuTempC', value: 20 }]], ['measure:take', []],
+    ['measure:list', ['x']], ['measure:export', ['C:\\Windows\\evil.csv']],
   ];
   for (const [name, args] of bad) assert.deepEqual(await w.call(name, ...args), INVALID, `${name} ${JSON.stringify(args).slice(0, 60)}`);
   assert.equal(w.calls.length, 0);
@@ -158,4 +176,96 @@ test('every bridge call has a guarded channel, and main registers channels only 
   assert.match(main, /sandbox: true/);
   assert.match(main, /setWindowOpenHandler\(\(\) => \(\{ action: 'deny' \}\)\)/);
   assert.match(main, /will-navigate/);
+});
+
+test('measurements are taken by the main process; the window only names the kind', async () => {
+  const w = world();
+  const r = await w.call('measure:take', 'rest');
+  assert.equal(r.ok, true);
+  assert.deepEqual(w.measured, [{ metric: 'restCpuLoad', value: 4 }], 'what the main process measured is stored');
+  const b = await w.call('measure:take', 'boot');
+  assert.deepEqual(b.data, { fastStartup: true, systemMedia: 'ssd', lastBootType: 'full', timings: 'ok', current: { bootToDesktopMs: { value: 20000 } } },
+    "the facts and this read's own values go back; the records go to the store");
+  assert.equal(w.measured.length, 2);
+  assert.equal((await w.call('measure:list')).data.records.length, 2);
+  assert.equal((await w.call('measure:export')).data, 'C:\\dl\\Tune-measurements.csv');
+});
+
+test('one measurement at a time', async () => {
+  const w = world();
+  let release;
+  w.sys.restMeasure = () => new Promise((r) => { release = () => r(ok([])); });
+  const first = w.call('measure:take', 'rest');
+  assert.deepEqual(await w.call('measure:take', 'boot'), { ok: false, error: 'busy' }, 'refused while the first runs');
+  release();
+  assert.equal((await first).ok, true);
+  assert.equal((await w.call('measure:take', 'boot')).ok, true, 'accepted again once it finished');
+});
+
+test('a cleanup measures the drive right before and after, linked to its history entry', async () => {
+  const w = world();
+  await w.scanned();
+  const r = await w.call('junk:clean', ['userTemp']);
+  assert.deepEqual(w.calls.map((c) => c[0]), ['diskFree', 'junkClean', 'diskFree'], 'before, the cleanup, after');
+  assert.deepEqual(r.data.onDisk, { state: 'better', delta: 1 });
+  const pair = w.measured.find((m) => m[0] === 'pair');
+  assert.equal(pair[3], `id-${w.history.length}`, 'the pair points at the history entry of this cleanup');
+});
+
+test('licensing requests carry only what the person typed or chose, in the expected shape', async () => {
+  const w = world();
+  const bad = [
+    ['license:ownerStart', ['not an email']], ['license:ownerStart', ['a@b.c'.padStart(300, 'x')]], ['license:ownerStart', [{ email: 'a@b.cd' }]],
+    ['license:ownerConfirm', ['12345']], ['license:ownerConfirm', ['1234567']], ['license:ownerConfirm', [123456]],
+    ['license:activate', ['<script>']], ['license:activate', ['A'.repeat(65)]], ['license:activate', [{ code: 'x' }]],
+    ['license:recover', ['../../etc']], ['license:recover', ['lic_123']], ['license:status', ['x']], ['license:retry', [1]],
+  ];
+  for (const [name, args] of bad) assert.deepEqual(await w.call(name, ...args), INVALID, `${name} ${JSON.stringify(args).slice(0, 40)}`);
+  assert.equal(w.calls.length, 0);
+  await w.call('license:ownerStart', 'Owner@Example.com');
+  await w.call('license:ownerConfirm', '123456');
+  await w.call('license:activate', 'abcd-efgh-jkmn-pqrs-tvwx-yz01-2345-6789');
+  await w.call('license:recover');
+  await w.call('license:recover', 'lic_0123456789abcdef01234567');
+  assert.deepEqual(w.calls.map((c) => c[0]), ['licensing.startOwner', 'licensing.confirmOwner', 'licensing.activate', 'licensing.recover', 'licensing.recover']);
+});
+
+test('every gated channel exists, and the shipped policy changes nothing', async () => {
+  const w = world();
+  for (const channels of Object.values(GATED)) for (const c of channels) assert.ok(w.channels[c], `${c} is a channel`);
+  await w.scanned();
+  await w.call('junk:clean', ['userTemp']);
+  assert.ok(w.calls.some((c) => c[0] === 'junkClean'), 'open policy: the action runs');
+});
+
+test('entitlements are enforced in the main process: a direct request without a licence runs nothing', async () => {
+  const w = world({ policy: 'enforce' });
+  await w.scanned();
+  const attempts = [
+    ['drv:install', [GUID1], 'all'], ['drv:gpuInstaller', 'AMD Radeon RX 7900 XTX'], ['dev:enable', 'USB\\VID_1234\\5'],
+    ['bios:download', 'bios'], ['junk:clean', ['userTemp']], ['startup:toggle', 'HKCU', 'Discord', false], ['rec:apply', 'power'],
+  ];
+  for (const [name, ...args] of attempts) {
+    const r = await w.call(name, ...args);
+    assert.deepEqual([r.ok, r.error], [false, 'not entitled'], name);
+  }
+  assert.equal(w.calls.length, 0, 'nothing ran');
+  assert.equal(w.history.length, 0, 'nothing was recorded');
+  // never gated: scans, exports, history, restore points, settings, licensing itself
+  for (const name of ['hw:scan', 'junk:scan', 'history:get', 'restore:create', 'measure:list', 'measure:export', 'hw:export', 'settings:get', 'license:status', 'license:recover']) {
+    const args = name === 'hw:export' ? ['csv'] : [];
+    const r = await w.call(name, ...args);
+    assert.notEqual(r && r.error, 'not entitled', name);
+  }
+});
+
+test('an active licence opens only the features its signed certificate lists', async () => {
+  const w = world({ policy: 'enforce', license: () => ({ state: 'active', features: ['cleanup'] }) });
+  await w.scanned();
+  assert.notEqual((await w.call('junk:clean', ['userTemp'])).error, 'not entitled');
+  assert.equal((await w.call('startup:toggle', 'HKCU', 'Discord', false)).reason, 'notInPlan');
+  // an expired or set-back licence opens nothing
+  const x = world({ policy: 'enforce', license: () => ({ state: 'clock', features: ['cleanup'] }) });
+  await x.scanned();
+  assert.equal((await x.call('junk:clean', ['userTemp'])).reason, 'noLicense');
 });

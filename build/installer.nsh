@@ -16,7 +16,14 @@
 !macro customRemoveFiles
   ${ifNot} ${isUpdated}
     DetailPrint "Removing the Tune background service..."
-    ExecWait '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --uninstall-service'
+    ExecWait '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --uninstall-service' $0
+    ; A service that couldn't be removed (approval declined, or Windows refused) is said, not hidden.
+    ${if} $0 != 0
+      DetailPrint "The Tune background service was not removed (code $0)."
+      ${ifNot} ${Silent}
+        MessageBox MB_OK|MB_ICONEXCLAMATION "The Tune background service could not be removed. To remove it later, run this in an administrator command prompt:$\r$\n$\r$\nsc delete TuneService"
+      ${endif}
+    ${endif}
   ${endif}
 
   ${if} ${isUpdated}

@@ -1,10 +1,13 @@
-const { app, BrowserWindow, ipcMain, shell, screen, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, screen, dialog, safeStorage, net, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 const { autoUpdater } = require('electron-updater');
 const sys = require('./system.cjs');
 const { pathToFileURL } = require('url');
 const { hardwareReport } = require('./report.cjs');
+const { createMeasureStore } = require('./measure-store.cjs');
+const { createLicensing } = require('./licensing/index.cjs');
 const { createChannels, CACHE_KEYS } = require('./ipc/channels.cjs');
 const { createOffers } = require('./ipc/offers.cjs');
 const { isTrustedSender, dispatch, pageOf } = require('./ipc/guard.cjs');
@@ -13,10 +16,18 @@ const { isTrustedSender, dispatch, pageOf } = require('./ipc/guard.cjs');
 
 const historyFile = () => path.join(app.getPath('userData'), 'history.json');
 const readHistory = () => { try { return JSON.parse(fs.readFileSync(historyFile(), 'utf8')); } catch { return []; } };
+// Each entry gets an ID, so measurements taken around a change can point at it (measure-store.cjs).
 function addHistory(action, detail) {
+  const id = crypto.randomUUID();
   fs.mkdirSync(app.getPath('userData'), { recursive: true });
-  fs.writeFileSync(historyFile(), JSON.stringify([{ action, detail, at: new Date().toISOString() }, ...readHistory()].slice(0, 500), null, 2));
+  fs.writeFileSync(historyFile(), JSON.stringify([{ id, action, detail, at: new Date().toISOString() }, ...readHistory()].slice(0, 500), null, 2));
+  return id;
 }
+
+// ---------- measurements (before and after a change; kept on this PC only) ----------
+
+let measureStore = null;
+const measurements = () => (measureStore ||= createMeasureStore({ file: path.join(app.getPath('userData'), 'measurements.json') }));
 
 // ---------- settings (the save folder is chosen only here) ----------
 
@@ -25,7 +36,9 @@ function getSettings() {
   let s = {};
   try { s = JSON.parse(fs.readFileSync(settingsFile(), 'utf8')); } catch { /* first run */ }
   // English unless the user picked Hebrew in Settings.
-  return { saveDir: s.saveDir && fs.existsSync(s.saveDir) ? s.saveDir : app.getPath('downloads'), lang: s.lang === 'he' ? 'he' : 'en', sound: s.sound !== false };
+  // serviceLater: the pair of service versions "Later" was chosen for (the outdated-service notice)
+  const serviceLater = typeof s.serviceLater === 'string' && /^(\d{1,6}|unknown)>\d{1,6}$/.test(s.serviceLater) ? s.serviceLater : null;
+  return { saveDir: s.saveDir && fs.existsSync(s.saveDir) ? s.saveDir : app.getPath('downloads'), lang: s.lang === 'he' ? 'he' : 'en', sound: s.sound !== false, serviceLater };
 }
 function saveSettings(s) {
   fs.mkdirSync(app.getPath('userData'), { recursive: true });
@@ -90,6 +103,31 @@ function exportHardware(hw, format) {
   return { ok: true, data: file };
 }
 
+function exportMeasurements() {
+  const stamp = new Date().toISOString().slice(0, 16).replace('T', '-').replace(':', '');
+  const file = path.join(getSettings().saveDir, `Tune-measurements-${stamp}.csv`);
+  try {
+    fs.writeFileSync(file, '\ufeff' + measurements().csv(), 'utf8'); // BOM: Excel reads it as UTF-8
+  } catch (e) {
+    return { ok: false, error: String(e.message || e) };
+  }
+  shell.showItemInFolder(file);
+  return { ok: true, data: file };
+}
+
+// ---------- licensing (licensing/: shipped defaults change nothing; see licensing/config.cjs) ----------
+
+// Created on first use, after the app is ready (safeStorage and net need it).
+let licensingParts = null;
+const licensing = () => (licensingParts ||= createLicensing({
+  packaged: app.isPackaged,
+  userData: app.getPath('userData'),
+  safeStorage,
+  fetch: typeof net.fetch === 'function' ? (url, init) => net.fetch(url, init) : globalThis.fetch,
+  // a renewal or release seen in the background: the window reads the new status
+  onChange: () => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('license:changed'); },
+}));
+
 // The background service ships in resources/service (service/bin while developing).
 const serviceDir = () => (app.isPackaged ? path.join(process.resourcesPath, 'service') : path.join(__dirname, '..', 'service', 'bin'));
 
@@ -100,7 +138,7 @@ const pageUrl = process.env.VITE_DEV ? 'http://localhost:5175/' : pathToFileURL(
 // What the main process found itself; actions point at these by ID.
 const offers = createOffers();
 const channels = createChannels({
-  sys, offers, shell, progressTo, warmOr, serviceDir, exportHardware,
+  sys, offers, shell, progressTo, warmOr, serviceDir, exportHardware, exportMeasurements,
   appVersion: () => app.getVersion(),
   updater: {
     check: () => (app.isPackaged ? autoUpdater.checkForUpdates().then(() => true).catch(() => false) : false),
@@ -109,6 +147,25 @@ const channels = createChannels({
   },
   cache: { read: readCache, write: writeCache },
   history: { add: addHistory, read: readHistory },
+  licensing: {
+    status: () => licensing().client.status(),
+    startOwner: (email) => licensing().client.startOwner(email),
+    confirmOwner: (code) => licensing().client.confirmOwner(code),
+    activate: (serial) => licensing().client.activate(serial),
+    recover: (licenseId) => licensing().client.recover(licenseId),
+    retry: () => licensing().client.retry(),
+    refresh: () => licensing().client.refresh(),
+    reset: () => licensing().client.reset(),
+  },
+  entitlements: {
+    featureOf: (channel) => licensing().entitlements.featureOf(channel),
+    check: (feature) => licensing().entitlements.check(feature),
+  },
+  measurements: {
+    add: (records) => measurements().add(records),
+    addDiskPair: (before, after, id) => measurements().addDiskPair(before, after, id),
+    view: (actions) => measurements().view(actions),
+  },
   settings: {
     get: getSettings,
     save: saveSettings,
@@ -170,14 +227,23 @@ if (serviceArg) {
     const install = serviceArg === '--install-service';
     const r = install ? await sys.installService(serviceDir()) : await sys.uninstallService();
     if (r.ok) addHistory('service', install ? { installed: true, pawnio: r.data.pawnio, at: 'setup' } : { installed: false });
+    // the result, for whoever ran it (seen when its output is redirected, as in CI)
+    try { process.stdout.write(`${JSON.stringify(r)}\n`); } catch { /* no console */ }
     app.exit(r.ok ? 0 : 1);
   });
 } else if (!app.requestSingleInstanceLock()) {
   app.exit(0);
 } else {
   app.on('second-instance', focusMain);
-  app.whenReady().then(() => { prewarm(); createWindow(); });
+  // licensing reads what is stored and renews in the background when due; it never delays the window
+  app.whenReady().then(() => {
+    prewarm();
+    createWindow();
+    licensing().client.init();
+    // after sleep or a locked session the licence is looked at again at once (timers may have missed it)
+    for (const e of ['resume', 'unlock-screen']) powerMonitor.on(e, () => licensing().client.wake());
+  });
 }
 app.on('window-all-closed', () => app.quit());
 // Closing Tune also ends an open admin session instead of leaving it for the rest of its 10 minutes.
-app.on('will-quit', () => sys.adminStop());
+app.on('will-quit', () => { sys.adminStop(); if (licensingParts) licensingParts.client.dispose(); });

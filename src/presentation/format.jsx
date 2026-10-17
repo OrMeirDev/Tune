@@ -15,6 +15,11 @@ export const errText = (e, t) => ({
   'checksum mismatch': t('err.checksum'),
   'signature check failed': t('err.signature'),
   'results are out of date: scan again': t('err.stale'),
+  busy: t('err.busy'),
+  'not entitled': t('err.notEntitled'),
+  // the request reached the service or the helper, but no answer came: it may have run
+  'no answer in time': t('err.noAnswer'),
+  'the connection closed without an answer': t('err.noAnswer'),
 }[e] || t('err.generic', { e }));
 
 export const mmss = (ms) => { const s = Math.max(0, Math.round(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };

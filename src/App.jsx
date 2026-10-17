@@ -11,6 +11,7 @@ import { UpdateBanner } from './components/AppUpdateBanner.jsx';
 import { Banner } from './components/NoticeBanner.jsx';
 import { BiosGuide } from './features/bios/BiosGuideDialog.jsx';
 import { CleanPage } from './features/cleanup/CleanupPage.jsx';
+import { DiagnosePage } from './features/diagnose/DiagnosePage.jsx';
 import { CenterPage } from './features/diagnostics/DiagnosticsPage.jsx';
 import { centerItems } from './features/diagnostics/findingSelectors.js';
 import { SettingGuide } from './features/guides/SettingGuideDialog.jsx';
@@ -20,13 +21,14 @@ import { OverviewPage } from './features/overview/OverviewPage.jsx';
 import { PerfPage } from './features/performance/PerformancePage.jsx';
 import { useLiveSensors } from './features/sensors/useSensorSnapshot.js';
 import { AdminChip } from './features/settings/PrivilegeSessionChip.jsx';
+import { ServiceUpdateNotice } from './features/settings/ServiceUpdateNotice.jsx';
 import { SettingsPage } from './features/settings/SettingsPage.jsx';
 import { StartupPage } from './features/startup/StartupPage.jsx';
 import { UpdatesPage } from './features/updates/UpdatesPage.jsx';
 import { LangContext, makeT } from './i18n.js';
 
 // Which results each page shows, for the "showing the last scan · updating" label.
-const STALE_KEYS = { updates: ['wu', 'gpu', 'bios'], hardware: ['hw'], overview: ['junk', 'startup', 'recs'], clean: ['junk'], startup: ['startup'], recs: ['recs'] };
+const STALE_KEYS = { updates: ['wu', 'gpu', 'bios'], hardware: ['hw'], diagnose: ['startup', 'recs'], overview: ['junk', 'startup', 'recs'], clean: ['junk'], startup: ['startup'], recs: ['recs'] };
 
 // ---------------- shell ----------------
 
@@ -39,8 +41,16 @@ export default function App() {
   const [guide, setGuide] = useState(false);
   const [settingGuide, setSettingGuide] = useState(null);
   const [settings, setSettings] = useState(null);
-  const [live, history] = useLiveSensors(page === 'perf' || page === 'recs' || page === 'overview');
+  // the problem picked on the "fix a problem" page (or from the overview's shortcuts)
+  const [problem, setProblem] = useState(null);
+  // bumped when a measurement is stored, so the before/after panel reloads
+  const [measured, setMeasured] = useState(0);
+  const [live, history] = useLiveSensors(['perf', 'recs', 'overview', 'diagnose'].includes(page));
   const [service, setService] = useState(null);
+  // the last service install or update that didn't succeed (cancelled or failed), for Settings
+  const [serviceAttempt, setServiceAttempt] = useState(null);
+  // the outdated-service notice, once closed by Update, stays closed for this run
+  const [noticeClosed, setNoticeClosed] = useState(false);
   // English until the saved choice is read; a first launch stays English.
   const t = useMemo(() => makeT(settings?.lang || 'en'), [settings?.lang]);
 
@@ -51,15 +61,16 @@ export default function App() {
 
   // The scan results and how they are fetched (app/useScanResults.js).
   const results = useScanResults({ setMsg });
-  const { hw, wu, gpu, bios, sources, scan, junk, startup, perf, recs, fresh, stale, setJunk, setPerf, setRecs, loadJunk, loadPerf, loadRecs, fullScan, showCached } = results;
+  const { hw, wu, gpu, bios, sources, scan, junk, startup, perf, recs, fresh, stale, setJunk, setPerf, setRecs, loadJunk, loadStartup, loadPerf, loadRecs, fullScan, showCached } = results;
   // Actions that change the system, one at a time (app/useOperations.js), and what each button does
   // (app/useCommands.js).
   const { busy, prog, act, lockWhile } = useOperations({ t, service, adminUntil, setAdminUntil, setMsg });
   const loadService = useCallback(async () => setService(await api.serviceStatus()), []);
   const {
     installDrivers, gpuInstall, biosDownload, enable, clean, toggle, apply, restorePoint, exportHw,
-    adminStart, adminStop, installService, removeService, setLang,
-  } = useCommands({ t, act, results, loadService, setGuide, setAdminUntil, setSettings });
+    adminStart, adminStop, installService, removeService, setLang, measureRest, exportMeasurements,
+  } = useCommands({ t, act, results, loadService, setServiceAttempt, setGuide, setAdminUntil, setSettings, onMeasured: () => setMeasured((n) => n + 1) });
+  const pickProblem = (p) => { setProblem(p); setPage('diagnose'); };
 
   useEffect(() => {
     if (!api) return undefined;
@@ -111,7 +122,15 @@ export default function App() {
           <Banner msg={shownMsg} onClose={() => setMsg(null)} />
           {page === 'updates' && <UpdatesPage hw={hw} wu={wu} gpu={gpu} bios={bios} sources={sources} scan={scan} soundKey={settings?.sound !== false && fresh.wu && !scan.running ? scan.at : null} busy={lockWhile(scan.running)} onScan={fullScan} onInstall={installDrivers} onGpu={gpuInstall} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} onEnable={enable} prog={prog} />}
           {page === 'hardware' && <HardwarePage hw={hw} onExport={exportHw} />}
-          {page === 'overview' && <OverviewPage junk={junk} startup={startup} perf={perf} live={live} recs={recs && centerItems({ recs, bios, gpu, junk, startup, live, history, sources })} go={setPage} sources={sources} />}
+          {page === 'diagnose' && (
+            <DiagnosePage
+              problem={problem} onProblem={setProblem} recs={recs} gpu={gpu} startup={startup} perf={perf} history={history} sources={sources} service={service}
+              scanning={scan.running} go={setPage} onApply={apply} onGuide={setSettingGuide} onInstallService={installService}
+              onRecheck={() => Promise.all([loadStartup(), loadRecs(), loadPerf()])} onMeasure={measureRest} onExport={exportMeasurements} measured={measured}
+              busy={lockWhile(stale('recs'))} prog={prog}
+            />
+          )}
+          {page === 'overview' && <OverviewPage junk={junk} startup={startup} perf={perf} live={live} recs={recs && centerItems({ recs, bios, gpu, junk, startup, live, history, sources })} go={setPage} onProblem={pickProblem} sources={sources} />}
           {page === 'clean' && <CleanPage junk={junk} failed={sources.junk === 'error'} onRescan={() => { setJunk(null); loadJunk(); }} onClean={clean} busy={lockWhile(stale('junk'))} />}
           {page === 'startup' && <StartupPage startup={startup} failed={sources.startup === 'error'} onToggle={toggle} busy={lockWhile(stale('startup'))} prog={prog} />}
           {page === 'perf' && <PerfPage perf={perf} live={live} history={history} service={service} onRefresh={() => { setPerf(null); loadPerf(); }} onInstallService={installService} busy={busy} />}
@@ -123,11 +142,16 @@ export default function App() {
               onGuide={setSettingGuide} busy={lockWhile(stale('recs'))} prog={prog}
             />
           )}
-          {page === 'history' && <HistoryPage busy={busy} onRestorePoint={restorePoint} />}
-          {page === 'settings' && <SettingsPage version={version} status={appUpdate} settings={settings} onLang={setLang} onSound={async (on) => setSettings(await api.setSound(on))} service={service} onInstallService={installService} onRemoveService={removeService} busy={busy} prog={prog} onPickDir={async () => setSettings(await api.pickSaveDir())} onCheck={async () => { setAppUpdate({ state: 'checking' }); if (!(await api.checkAppUpdate())) setAppUpdate({ state: 'dev' }); }} />}
+          {page === 'history' && <HistoryPage busy={busy} onRestorePoint={restorePoint} measured={measured} />}
+          {page === 'settings' && <SettingsPage version={version} status={appUpdate} settings={settings} onLang={setLang} onSound={async (on) => setSettings(await api.setSound(on))} service={service} serviceAttempt={serviceAttempt} onInstallService={installService} onRemoveService={removeService} busy={busy} prog={prog} onPickDir={async () => setSettings(await api.pickSaveDir())} onCheck={async () => { setAppUpdate({ state: 'checking' }); if (!(await api.checkAppUpdate())) setAppUpdate({ state: 'dev' }); }} />}
         </main>
         {guide && bios?.latest && <BiosGuide bios={bios} onClose={() => setGuide(false)} onDownload={biosDownload} busy={busy === 'bios'} prog={prog.bios} />}
         {settingGuide && <SettingGuide item={settingGuide} boardMaker={hw?.boardMaker} onClose={() => setSettingGuide(null)} />}
+        {service?.notice && !noticeClosed && (
+          <ServiceUpdateNotice service={service} busy={busy}
+            onUpdate={() => { setNoticeClosed(true); installService(); }}
+            onLater={async () => { setNoticeClosed(true); setService(await api.serviceLater()); }} />
+        )}
       </div>
     </LangContext.Provider>
   );

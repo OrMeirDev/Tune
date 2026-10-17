@@ -1,9 +1,20 @@
 // Builds the background service into service/bin (bundled with the app as resources/service):
 // - LibreHardwareMonitor 0.9.6 (official .NET Framework release, pinned by hash): only the library
 //   and the files it needs, plus its MPL-2.0 license;
-// - TuneService.exe, compiled with the C# compiler that ships with Windows (.NET Framework 4.8);
-// - ops.ps1, generated from the same operations Tune runs through the admin session.
-const { execFileSync } = require('child_process');
+// - TuneService.exe, compiled with the C# compiler that ships with Windows (.NET Framework 4.8), with
+//   its version from electron/privilege/service-version.cjs (the one the app expects);
+// - ops.ps1, generated from the same operations Tune runs through the admin session;
+// - electron/privilege/service-manifest.json (packed into the app): the SHA-256 of every file above,
+//   which the elevated installer checks each copy against inside Program Files (audit TUN-02), and the
+//   thumbprint of the certificate TuneService.exe is signed with, when it is.
+//
+// Signing (audit TUN-09): with a certificate configured, TuneService.exe is signed here, before it is
+// hashed; electron-builder is told not to sign it again (package.json win.signExts "!TuneService.exe"),
+// which would change the file after its hash was taken. TUNE_SIGN_COMMAND (a command with {file}) is
+// for a certificate on a token or in a signing service; otherwise CSC_LINK (the path of a .pfx) and
+// CSC_KEY_PASSWORD, the variables electron-builder signs Tune.exe and the installer with.
+// TUNE_SIGN_TIMESTAMP_URL adds a timestamp. Without any of them the build is unsigned.
+const { execFileSync, execSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
@@ -21,6 +32,50 @@ const LHM = {
     'System.Buffers.dll', 'System.Memory.dll', 'System.Numerics.Vectors.dll', 'System.Runtime.CompilerServices.Unsafe.dll',
     'System.Security.AccessControl.dll', 'System.Security.Principal.Windows.dll', 'System.Threading.AccessControl.dll'],
 };
+
+const version = require('../electron/privilege/service-version.cjs');
+
+// The C# side of the one version number.
+const buildInfo = (v) => {
+  if (!/^\d+$/.test(v)) throw new Error(`serviceVersion must be a whole number, not ${v}`);
+  return `namespace Tune { static class BuildInfo { public const string Version = "${v}"; } }\n`;
+};
+
+// Windows PowerShell with its own modules only (started from PowerShell 7 it would inherit 7's module
+// path, where Set-AuthenticodeSignature's module doesn't load).
+const powershell = (command) => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `$env:PSModulePath=[IO.Path]::Combine($PSHOME,'Modules'); ${command}`], { encoding: 'utf8', env: process.env }).trim();
+
+// The thumbprint of the certificate a file is signed with, or null.
+const signerOf = (file) => powershell(`$s = Get-AuthenticodeSignature -LiteralPath '${file.replace(/'/g, "''")}'; if ($s.SignerCertificate) { $s.SignerCertificate.Thumbprint }`) || null;
+
+// Signs TuneService.exe when a certificate is configured; returns the signer's thumbprint, or null.
+function signService(file) {
+  if (process.env.TUNE_SIGN_COMMAND) {
+    execSync(process.env.TUNE_SIGN_COMMAND.split('{file}').join(`"${file}"`), { stdio: 'inherit' });
+  } else if (process.env.CSC_LINK) {
+    if (!fs.existsSync(process.env.CSC_LINK)) throw new Error('CSC_LINK must be the path of a .pfx file to sign the service');
+    const ts = process.env.TUNE_SIGN_TIMESTAMP_URL ? ' -TimestampServer $env:TUNE_SIGN_TIMESTAMP_URL' : '';
+    powershell('$c = New-Object Security.Cryptography.X509Certificates.X509Certificate2($env:CSC_LINK, $env:CSC_KEY_PASSWORD); '
+      + `$r = Set-AuthenticodeSignature -LiteralPath '${file.replace(/'/g, "''")}' -Certificate $c -HashAlgorithm SHA256${ts}; `
+      + "if (-not $r.SignerCertificate) { throw \"signing failed: $($r.StatusMessage)\" }");
+  } else {
+    return null;
+  }
+  const signer = signerOf(file);
+  if (!signer) throw new Error('TuneService.exe is not signed after signing');
+  return signer;
+}
+
+// Every file the service folder gets, with its SHA-256 (upper-case hex, as Get-FileHash prints it),
+// and an id for this exact set (a new folder per build in Program Files).
+function manifestOf(dir, v) {
+  const files = {};
+  for (const name of fs.readdirSync(dir).filter((n) => /\.(exe|dll|ps1|txt)$/i.test(n)).sort()) {
+    files[name] = crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, name))).digest('hex').toUpperCase();
+  }
+  const id = crypto.createHash('sha256').update(JSON.stringify(files)).digest('hex').slice(0, 12);
+  return { version: v, id, files };
+}
 
 async function download(url, sha256) {
   const res = await fetch(url);
@@ -41,15 +96,48 @@ async function fetchLibreHardwareMonitor() {
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+const csc = () => path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
+
+// TuneService.exe from service/TuneService.cs, with this version compiled in; `defines` only for the
+// fault-injection test copy (below).
+function compile(exe, defines = []) {
+  const gen = fs.mkdtempSync(path.join(os.tmpdir(), 'tune-service-'));
+  try {
+    fs.writeFileSync(path.join(gen, 'BuildInfo.g.cs'), buildInfo(version));
+    execFileSync(csc(), ['/nologo', '/optimize+', '/target:exe', '/platform:anycpu', `/out:${exe}`, ...defines.map((d) => `/define:${d}`),
+      '/r:System.ServiceProcess.dll', '/r:System.Web.Extensions.dll', '/r:System.Core.dll',
+      ...LHM.files.map((f) => `/r:${path.join(out, f)}`), path.join(root, 'service', 'TuneService.cs'), path.join(gen, 'BuildInfo.g.cs')], { stdio: 'inherit' });
+  } finally {
+    fs.rmSync(gen, { recursive: true, force: true });
+  }
+}
+
 (async () => {
+  if (require.main !== module) return;
+  // `--test-faults <folder>`: a copy of the service whose console mode can make one native step of
+  // containment fail (TUNE_FAULTS), for scripts/ci/service-containment-check.ps1 on a CI runner. It
+  // goes only to that folder: never service/bin, the manifest or the installer.
+  const faults = process.argv.indexOf('--test-faults');
+  if (faults > 0) {
+    const dir = process.argv[faults + 1];
+    if (!dir || path.resolve(dir).startsWith(path.resolve(out))) throw new Error('--test-faults needs a folder outside service/bin');
+    if (!fs.existsSync(path.join(out, 'LibreHardwareMonitorLib.dll'))) throw new Error('build the service first (npm run build:service)');
+    fs.mkdirSync(dir, { recursive: true });
+    for (const f of fs.readdirSync(out).filter((n) => /\.(dll|txt)$/i.test(n))) fs.copyFileSync(path.join(out, f), path.join(dir, f));
+    compile(path.join(dir, 'TuneService.exe'), ['TUNE_FAULTS']);
+    console.log(`service ${version} test copy with fault injection built in ${dir}`);
+    return;
+  }
   fs.mkdirSync(out, { recursive: true });
   // Left over from the first version, which read the CPU through its own PawnIO module.
   for (const f of ['IntelMSR.bin', 'PawnIO-modules-COPYING.txt']) fs.rmSync(path.join(out, f), { force: true });
   await fetchLibreHardwareMonitor();
-  const csc = path.join(process.env.WINDIR || 'C:\\Windows', 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe');
-  execFileSync(csc, ['/nologo', '/optimize+', '/target:exe', '/platform:anycpu', `/out:${path.join(out, 'TuneService.exe')}`,
-    '/r:System.ServiceProcess.dll', '/r:System.Web.Extensions.dll', '/r:System.Core.dll',
-    ...LHM.files.map((f) => `/r:${path.join(out, f)}`), path.join(root, 'service', 'TuneService.cs')], { stdio: 'inherit' });
+  compile(path.join(out, 'TuneService.exe'));
   fs.writeFileSync(path.join(out, 'ops.ps1'), '\ufeff' + require('../electron/system.cjs').serviceOpsScript(), 'utf8');
-  console.log('service built:', fs.readdirSync(out).join(', '));
+  const signer = signService(path.join(out, 'TuneService.exe'));
+  const manifest = { ...manifestOf(out, version), ...(signer ? { signer } : {}) };
+  fs.writeFileSync(path.join(root, 'electron', 'privilege', 'service-manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+  console.log(`service ${version} built (${manifest.id}${signer ? `, signed by ${signer}` : ', unsigned'}):`, Object.keys(manifest.files).join(', '));
 })().catch((e) => { console.error(e.message || e); process.exit(1); });
+
+module.exports = { buildInfo, manifestOf };

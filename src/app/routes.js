@@ -1,11 +1,12 @@
 // The pages and their sidebar groups.
-import { Cpu, History, RefreshCw, Rocket, Settings, Settings2, Sparkles, Thermometer, Trash2 } from 'lucide-react';
+import { Cpu, History, RefreshCw, Rocket, Settings, Settings2, Sparkles, Stethoscope, Thermometer, Trash2 } from 'lucide-react';
 
 export const PAGES = [
   { group: 'nav.drivers' },
   { id: 'updates', icon: RefreshCw, key: 'nav.updates' },
   { id: 'hardware', icon: Cpu, key: 'nav.hardware' },
   { group: 'nav.optimize' },
+  { id: 'diagnose', icon: Stethoscope, key: 'nav.diagnose' },
   { id: 'overview', icon: Sparkles, key: 'nav.overview' },
   { id: 'clean', icon: Trash2, key: 'nav.clean' },
   { id: 'startup', icon: Rocket, key: 'nav.startup' },

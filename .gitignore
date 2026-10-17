@@ -6,3 +6,6 @@ bin/
 .claude/
 *.log
 e2e/output/
+
+# Written by npm run build:service: the hashes of the service files this build ships.
+electron/privilege/service-manifest.json

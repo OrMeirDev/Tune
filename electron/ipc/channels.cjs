@@ -10,17 +10,52 @@ const { APPLYABLE } = require('./offers.cjs');
 const CACHE_KEYS = ['hw', 'wu', 'gpu', 'bios', 'junk', 'startup', 'recs', 'scanAt'];
 const GUID = /^[0-9a-fA-F-]{36}$/; // a Windows Update ID
 const PROGRESS_KEY = str(200); // which row shows a job's progress
+// licensing: what a person types (an email, the 6-digit code, a Serial as typed) and a licence id
+// the server listed for this owner (the main process checks it is one of those)
+const EMAIL = /^[^\s@]{1,64}@[^\s@]+\.[^\s@]{2,}$/;
+const OWNER_CODE = /^\d{6}$/;
+const SERIAL = /^[0-9A-Za-z \-]{1,64}$/;
+const LICENSE_ID = /^[a-z]{3,4}_[0-9a-f]{24}$/;
 
 // Runs `fn` with what an offer lookup found, or returns the lookup's refusal.
 const withOffer = (found, fn) => (found.ok ? fn(found.data) : found);
 
 function createChannels(d) {
-  const { sys, offers } = d;
+  const { sys, offers, licensing } = d;
   // Folders shown on the cleanup page open in Explorer; only folders the last scan reported.
   let junkDirs = new Set();
+  let measuring = false;
   const remember = (kind) => async (r) => offers.remember(kind, await r);
 
-  return {
+  // Every action that uses a feature asks the entitlement check first (licensing/entitlements.cjs);
+  // a refusal runs nothing. The check is made before the action starts, never during it. The shipped
+  // policy allows everything.
+  const gate = (name, channel) => {
+    const feature = d.entitlements.featureOf(name);
+    if (!feature) return channel;
+    return {
+      ...channel,
+      run: (...args) => {
+        const e = d.entitlements.check(feature);
+        return e.ok ? channel.run(...args) : { ok: false, error: 'not entitled', feature, reason: e.reason };
+      },
+    };
+  };
+
+  // The service as the window shows it (WIN-R03): its status, the version this app needs, whether it
+  // needs an update (installed but not this version: Settings keeps saying so until the main process
+  // has seen this version answer), and whether to show the notice about it (an older or unverifiable
+  // service that is running, unless "Later" was chosen for this same pair of versions). What runs
+  // a change is decided in privilege/service.cjs, not here and not in the window.
+  const serviceView = async () => {
+    const s = { ...(await sys.serviceStatus()).data, bundled: sys.SERVICE_VERSION };
+    s.needsUpdate = !!(s.installed && !s.current);
+    const pair = `${s.version || 'unknown'}>${sys.SERVICE_VERSION}`;
+    s.notice = s.needsUpdate && !!s.running && d.settings.get().serviceLater !== pair;
+    return { s, pair };
+  };
+
+  const table = {
     'update:check': { args: [], run: () => d.updater.check() },
     'update:download': { args: [], run: () => d.updater.download() },
     'update:install': { args: [], run: () => d.updater.install() },
@@ -81,8 +116,15 @@ function createChannels(d) {
     'junk:clean': {
       args: [arrayOf(str(40), 30)],
       run: (keys) => withOffer(offers.junkCategories(keys), async (cats) => {
+        // Free space on the system drive right before and after, so the result shows what the drive
+        // actually gained, next to the size of the files deleted (plan PF02).
+        const before = await sys.diskFree();
         const r = await sys.junkClean(cats.map((c) => c.key));
-        if (r.ok) d.history.add('clean', { cats: cats.map((c) => c.key), freed: r.data.freed });
+        if (r.ok) {
+          const after = await sys.diskFree();
+          const id = d.history.add('clean', { cats: cats.map((c) => c.key), freed: r.data.freed });
+          return { ...r, data: { ...r.data, onDisk: d.measurements.addDiskPair(before, after, id) } };
+        }
         return r;
       }),
     },
@@ -95,6 +137,33 @@ function createChannels(d) {
         return r;
       }),
     },
+
+    // Measurements (read only): the PC at rest, or Windows' start-up records. One at a time, so two
+    // rest measurements never see each other's load. The window says which kind; the values are
+    // taken here, never sent in.
+    'measure:take': {
+      args: [oneOf(['rest', 'boot'])],
+      run: async (what) => {
+        if (measuring) return { ok: false, error: 'busy' };
+        measuring = true;
+        try {
+          if (what === 'rest') {
+            const r = await sys.restMeasure({ onProgress: d.progressTo('measure') });
+            if (r.ok) d.measurements.add(r.data);
+            return r;
+          }
+          const r = await sys.bootInfo();
+          if (!r.ok) return r;
+          const { records, ...facts } = r.data;
+          d.measurements.add(records);
+          return { ok: true, data: facts };
+        } finally {
+          measuring = false;
+        }
+      },
+    },
+    'measure:list': { args: [], run: () => ({ ok: true, data: d.measurements.view(d.history.read()) }) },
+    'measure:export': { args: [], run: () => d.exportMeasurements() },
 
     'perf:get': { args: [], run: () => sys.performance() },
     'perf:sensors': { args: [], run: () => sys.sensors() },
@@ -120,7 +189,16 @@ function createChannels(d) {
     // only https pages, without credentials in the address
     'link:open': { args: [match(/^https:\/\/[^\s@/]+(\/[^\s]*)?$/, 2048)], run: (url) => d.shell.openExternal(url) },
 
-    'service:status': { args: [], run: async () => ({ ...(await sys.serviceStatus()).data, bundled: sys.SERVICE_VERSION }) },
+    'service:status': { args: [], run: async () => (await serviceView()).s },
+    // "Later" on the notice: not shown again for this pair of versions; the Settings reminder stays
+    'service:later': {
+      args: [],
+      run: async () => {
+        const { s, pair } = await serviceView();
+        if (s.needsUpdate) d.settings.save({ ...d.settings.get(), serviceLater: pair });
+        return (await serviceView()).s;
+      },
+    },
     'service:install': {
       args: [],
       run: async () => {
@@ -145,7 +223,20 @@ function createChannels(d) {
     'settings:setLang': { args: [oneOf(['he', 'en'])], run: (lang) => { d.settings.save({ ...d.settings.get(), lang }); return d.settings.get(); } },
     'settings:setSound': { args: [bool()], run: (on) => { d.settings.save({ ...d.settings.get(), sound: on }); return d.settings.get(); } },
     'settings:pickDir': { args: [], run: () => d.settings.pickDir() },
+
+    // Licensing (licensing/client.cjs): the window sends what the person typed or chose, and gets a
+    // summary back; tokens, keys and certificates stay in the main process.
+    'license:status': { args: [], run: () => licensing.status() },
+    'license:ownerStart': { args: [match(EMAIL, 254)], run: (email) => licensing.startOwner(email) },
+    'license:ownerConfirm': { args: [match(OWNER_CODE, 6)], run: (code) => licensing.confirmOwner(code) },
+    'license:activate': { args: [match(SERIAL, 64)], run: (serial) => licensing.activate(serial) },
+    'license:recover': { args: [optional(match(LICENSE_ID, 40))], run: (licenseId) => licensing.recover(licenseId) },
+    'license:retry': { args: [], run: () => licensing.retry() },
+    'license:refresh': { args: [], run: () => licensing.refresh() },
+    'license:reset': { args: [], run: () => licensing.reset() },
   };
+
+  return Object.fromEntries(Object.entries(table).map(([name, channel]) => [name, gate(name, channel)]));
 }
 
 module.exports = { createChannels, CACHE_KEYS };

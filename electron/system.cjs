@@ -10,6 +10,7 @@ const { junkScan, junkClean } = require('./features/cleanup.cjs');
 const { driverUpdates, installDrivers, enableDevice } = require('./features/drivers.cjs');
 const { gpuVendorCheck, downloadGpuInstaller } = require('./features/gpu-drivers.cjs');
 const { scanHardware } = require('./features/hardware.cjs');
+const { diskFree, restMeasure, bootInfo } = require('./features/measurements.cjs');
 const { recommendations, applyRecommendation } = require('./features/recommendations.cjs');
 const { createRestorePoint, openSystemRestore } = require('./features/restore.cjs');
 const { performance, sensors } = require('./features/sensors.cjs');
@@ -21,6 +22,7 @@ module.exports = {
   scanHardware, driverUpdates, gpuVendorCheck, downloadGpuInstaller, installDrivers, enableDevice,
   biosCheck, downloadBios,
   junkScan, junkClean, startupList, startupToggle, performance, sensors, recommendations, applyRecommendation,
+  diskFree, restMeasure, bootInfo,
   memChannel, ratedFromPart, advise,
   createRestorePoint, openSystemRestore, adminStatus, adminStart, adminStop,
   serviceStatus, installService, uninstallService, serviceOpsScript, SERVICE_VERSION,

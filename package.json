@@ -1,6 +1,6 @@
 {
   "name": "tune",
-  "version": "1.3.1",
+  "version": "1.4.0-beta.1",
   "description": "Tune - driver updater and PC optimizer",
   "author": "Or meir Tzarfati",
   "main": "electron/main.cjs",
@@ -16,8 +16,11 @@
     "e2e:celebration": "vite build && electron e2e/celebration.cjs",
     "e2e:ipc-probes": "vite build && electron e2e/ipc-probes.cjs",
     "e2e:layout": "vite build && electron e2e/layout.cjs",
+    "e2e:licensing": "vite build && electron e2e/licensing.cjs",
+    "e2e:licensing-startup": "vite build && node e2e/licensing-startup.cjs",
     "e2e:scan-failure": "vite build && electron e2e/scan-failure.cjs",
     "e2e:screenshots": "vite build && electron e2e/screenshots.cjs",
+    "e2e:service-update": "vite build && electron e2e/service-update.cjs",
     "e2e:smoke": "vite build && electron e2e/smoke.cjs"
   },
   "repository": "github:OrMeirDev/Tune",
@@ -72,7 +75,10 @@
           ]
         }
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "signExts": [
+        "!TuneService.exe"
+      ]
     },
     "nsis": {
       "oneClick": false,

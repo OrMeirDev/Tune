@@ -20,6 +20,21 @@ const fs = require('fs');
 const APP_DIR = path.join(__dirname, '..');
 const OUT_DIR = path.join(__dirname, 'output', path.basename(__filename, '.cjs'));
 fs.mkdirSync(OUT_DIR, { recursive: true });
+// The Settings card: its inner scroll width, its text (a clipped title or note is one whose content
+// is wider than its box), and anything drawn outside it.
+const SETTINGS_CHECK = `(() => {
+  const card = document.querySelector('.settings');
+  if (!card) return { missing: true };
+  const c = card.getBoundingClientRect();
+  const shown = (el) => el.getClientRects().length > 0;
+  const clipped = [...card.querySelectorAll('.setting-title, .row-meta, .setting button')]
+    .filter((el) => shown(el) && el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent.trim().slice(0, 60));
+  const outside = [...card.querySelectorAll('.setting > *, .setting .row-meta, .setting .setting-title')]
+    .filter((el) => { const r = el.getBoundingClientRect(); return shown(el) && r.width && (r.left < c.left - 1 || r.right > c.right + 1); })
+    .map((el) => el.textContent.trim().slice(0, 60));
+  return { scroll: card.scrollWidth, client: card.clientWidth, clipped, outside };
+})()`;
+
 const tune = APP_DIR;
 const out = OUT_DIR;
 app.on('window-all-closed', () => {});
@@ -77,12 +92,20 @@ app.whenReady().then(async () => {
       win.setContentSize(w, h); toSecondScreen(win); await wait(700);
       const navs = await js(`[...document.querySelectorAll('.nav-item')].map((b) => b.textContent)`);
       const idx = (re) => navs.findIndex((t) => re.test(t));
-      for (const [label, re] of [['center', /מרכז ביצועים|Performance center/], ['perf', /מעבד וזיכרון|CPU & memory/], ['overview', /סקירה|Overview/]]) {
+      for (const [label, re] of [['center', /מרכז ביצועים|Performance center/], ['perf', /מעבד וזיכרון|CPU & memory/], ['overview', /סקירה|Overview/], ['diagnose', /פתרון בעיה|Fix a problem/]]) {
         await nav(idx(re)); await wait(2600);
+        // the diagnosis page with a problem picked (reads Windows' start-up records; read only)
+        if (label === 'diagnose') { await js(`document.querySelector('.problem')?.click()`); await wait(12000); }
         const r = await js(CHECK);
         check(`${lang} ${w}x${h} ${label}: no overlap, no page/sidebar scroll, nothing sideways`, !r.pageScroll && !r.wide && !r.sideScroll && !r.overlaps.length, r.overlaps.length ? r.overlaps : undefined);
         await shot(`tune-${lang}-${w}-${label}.png`);
       }
+      // the Settings card itself: no sideways scroll inside it, no title or note clipped, nothing
+      // outside it (the background-service note overflowed it up to 1.3.1 and in L02's first version)
+      await nav(navs.length - 1); await wait(1200);
+      const st = await js(SETTINGS_CHECK);
+      check(`${lang} ${w}x${h} settings: no sideways scroll in the card, no text clipped or outside it`, !st.missing && st.scroll <= st.client + 1 && !st.clipped.length && !st.outside.length, st.missing || st.scroll > st.client + 1 || st.clipped.length || st.outside.length ? st : undefined);
+      await shot(`tune-${lang}-${w}-settings.png`);
       // the channels guide
       await nav(idx(/מרכז ביצועים|Performance center/)); await wait(800);
       const opened = await js(`(() => { const b = [...document.querySelectorAll('.drow')].find((r) => /ערוצי זיכרון|Memory channels/.test(r.textContent))?.querySelector('button'); if (b) b.click(); return !!b; })()`);

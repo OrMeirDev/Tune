@@ -16,6 +16,7 @@ contextBridge.exposeInMainWorld('tune', {
   exportHardware: call('hw:export'),
   openFolder: call('folder:open'),
   serviceStatus: call('service:status'),
+  serviceLater: call('service:later'),
   installService: call('service:install'),
   uninstallService: call('service:uninstall'),
   adminStatus: call('admin:status'),
@@ -36,6 +37,17 @@ contextBridge.exposeInMainWorld('tune', {
   startupToggle: call('startup:toggle'),
   performance: call('perf:get'),
   sensors: call('perf:sensors'),
+  measureTake: call('measure:take'),
+  measureList: call('measure:list'),
+  measureExport: call('measure:export'),
+  licenseStatus: call('license:status'),
+  licenseOwnerStart: call('license:ownerStart'),
+  licenseOwnerConfirm: call('license:ownerConfirm'),
+  licenseActivate: call('license:activate'),
+  licenseRecover: call('license:recover'),
+  licenseRetry: call('license:retry'),
+  licenseRefresh: call('license:refresh'),
+  licenseReset: call('license:reset'),
   recommendations: call('rec:list'),
   applyRecommendation: call('rec:apply'),
   createRestorePoint: call('restore:create'),
@@ -46,6 +58,11 @@ contextBridge.exposeInMainWorld('tune', {
   checkAppUpdate: call('update:check'),
   downloadAppUpdate: call('update:download'),
   installAppUpdate: call('update:install'),
+  onLicenseChange: (cb) => {
+    const handler = () => cb();
+    ipcRenderer.on('license:changed', handler);
+    return () => ipcRenderer.removeListener('license:changed', handler);
+  },
   onAppUpdate: (cb) => {
     const handler = (_e, s) => cb(s);
     ipcRenderer.on('update:status', handler);

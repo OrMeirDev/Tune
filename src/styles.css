@@ -569,3 +569,88 @@ html[dir=ltr] .path-text { text-align: left; }
 .si-title { font-size: 17px; font-weight: 700; color: var(--text); }
 .si-sub { font-size: 13px; color: var(--muted); max-width: 440px; margin-bottom: 8px; }
 .partial-scan { margin: 8px 12px 4px; }
+
+/* Fix a problem: the problem picker, the findings with their certainty and impact tags, and the
+   before/after panel next to them (under them in a narrow window). */
+.problem-picker { flex-shrink: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+.problem { display: flex; align-items: center; gap: 12px; text-align: start; padding: 11px 14px; border-radius: 18px; border: 1px solid var(--border); background: var(--glass, var(--card)); box-shadow: inset 0 1px 0 var(--edge, #fff), var(--shadow-control, none); color: var(--text); }
+.problem > svg { flex-shrink: 0; color: var(--accent); }
+.problem b { display: block; font-size: 14.5px; font-weight: 600; }
+.problem small { display: block; color: var(--muted); font-size: 12px; margin-top: 1px; }
+.problem:hover { background: #fff; }
+.problem.active { border-color: rgba(var(--accent-rgb, 22, 163, 74), .45); background: rgba(var(--accent-rgb, 22, 163, 74), .08); box-shadow: inset 0 0 0 1px rgba(var(--accent-rgb, 22, 163, 74), .25); }
+.dx-body { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 34%); gap: 12px; padding-bottom: 14px; }
+.dx-body > .panel { min-height: 0; }
+@media (max-width: 1180px) { .dx-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 3fr) minmax(0, 2fr); } }
+.dx-row .dname { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; white-space: normal; }
+.tag { display: inline-flex; align-items: center; font-size: 11px; font-weight: 500; padding: 1px 8px; border-radius: 99px; background: #f0f2f7; color: var(--muted); white-space: nowrap; }
+.tag.c-measured { background: rgba(37, 99, 235, .09); color: #1d4ed8; }
+.tag.c-suspected { background: #fef3c7; color: #92400e; }
+.tag.c-unknown { background: #f1f1f4; color: #5b5f6e; }
+.tag.c-historical { background: #eef2ff; color: #4338ca; }
+.dx-hist { font-style: italic; }
+.tag.c-ok, .tag.s-better { background: rgba(var(--accent-rgb, 22, 163, 74), .1); color: var(--accent); }
+.tag.i-high, .tag.s-worse { background: #fee2e2; color: #b91c1c; }
+.tag.i-medium { background: #ffedd5; color: #9a3412; }
+.tag.i-low { background: #f1f1f4; color: #5b5f6e; }
+.tag.s-same, .tag.s-notComparable { background: #f1f1f4; color: #5b5f6e; }
+.dx-limit { display: flex; gap: 6px; align-items: flex-start; padding: 8px 14px; white-space: normal; }
+.dx-limit svg { flex-shrink: 0; margin-top: 3px; }
+.dx-verdict { margin: 10px 14px 4px; }
+.problem-strip { flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: -6px 0 12px; }
+.problem-strip > span { color: var(--muted); font-size: 14px; margin-inline-end: 4px; }
+.problem-strip .btn-ghost { min-height: 34px; padding: 5px 12px; font-size: 13.5px; }
+.problem-strip .btn-ghost svg { color: var(--accent); }
+.header-actions .btn-ghost { white-space: nowrap; }
+.btn-ghost.small { min-height: 32px; padding: 4px 10px; font-size: 13px; gap: 6px; }
+.ba-panel .panel-title { gap: 8px; }
+.ba-body { padding: 8px 14px 12px; display: flex; flex-direction: column; gap: 10px; }
+.ba-intro { white-space: normal; }
+.ba-latest { display: flex; flex-direction: column; gap: 4px; font-size: 13px; padding: 8px 10px; border-radius: 12px; background: rgba(var(--accent-rgb, 22, 163, 74), .05); }
+.ba-latest b { font-weight: 600; margin-inline-end: 4px; }
+.ba-change { border-top: 1px solid rgba(119, 160, 217, .14); padding-top: 8px; }
+.ba-change .dname { font-size: 13.5px; }
+.ba-when { font-size: 12px; font-weight: 400; margin-inline-start: 6px; }
+.ba-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; margin-top: 4px; }
+.ba-line > svg { flex-shrink: 0; }
+.ba-line.ba-better > svg { color: var(--accent); }
+.ba-line.ba-worse > svg { color: #b91c1c; }
+.ba-why { color: var(--muted); font-size: 12px; }
+.drow .ba-line { margin-top: 3px; }
+
+/* The licence: its row in Settings and the activation dialog (one form per step). */
+.license-setting .row-meta + .row-meta { margin-top: 1px; }
+.license-dialog { width: min(560px, 100%); }
+.service-notice { width: min(520px, 100%); }
+.service-notice-body p { margin: 0 0 10px; line-height: 1.5; }
+.svc-reminder { margin-top: 6px; }
+.license-body { display: flex; flex-direction: column; gap: 12px; padding: 4px 0 12px; overflow-y: auto; }
+.lic-form { display: flex; flex-direction: column; gap: 6px; }
+.lic-form label { font-weight: 600; font-size: 13.5px; }
+.lic-row { display: flex; gap: 8px; align-items: center; }
+.lic-row input { flex: 1; min-width: 0; font: inherit; font-size: 14px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 10px; background: #fff; color: var(--text); }
+.lic-row input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+#lic-serial, #lic-code { font-family: Consolas, 'Cascadia Mono', monospace; letter-spacing: .5px; }
+.lic-verified { display: flex; align-items: center; gap: 6px; color: var(--accent); }
+.lic-or { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; }
+.lic-or::before, .lic-or::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+.lic-recover { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.lic-recover .dmeta { white-space: normal; }
+.lic-recover .btn-ghost { flex-shrink: 0; }
+.lic-choices { border: 1px solid var(--border); border-radius: 12px; padding: 8px 12px 12px; display: flex; flex-direction: column; gap: 6px; }
+.lic-choices legend { font-weight: 600; font-size: 13px; padding: 0 4px; }
+.lic-choices label { display: flex; align-items: center; gap: 8px; font-size: 13.5px; }
+.lic-choices .btn-primary { align-self: flex-start; margin-top: 4px; }
+.lic-outcome { margin: 0; }
+.lic-outcome .link-btn { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; }
+.lic-done { display: flex; gap: 12px; align-items: flex-start; color: var(--text); }
+.lic-done > svg { color: var(--accent); flex-shrink: 0; margin-top: 2px; }
+.lic-done b { display: block; margin-bottom: 4px; }
+
+/* Settings rows: the text takes the room the controls leave and wraps, the controls keep their
+   size. The shared theme keeps .row-meta on one line (for list rows); in Settings a note is a
+   sentence, so it wraps instead of pushing the row (and the card) sideways. A long folder path
+   breaks anywhere rather than overflow. */
+.setting > :first-child { flex: 1 1 auto; min-width: 0; }
+.setting > :not(:first-child) { flex-shrink: 0; }
+.settings .row-meta { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; }

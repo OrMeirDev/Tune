@@ -30,6 +30,15 @@ const sys = require(path.join(APP_DIR, 'electron', 'system.cjs'));
 let mode = 1;
 const BIOS_OK = { ok: true, data: { supported: true, newer: false, maker: 'ASUS', model: 'PRIME Z790-P WIFI' } };
 const BIOS_NEW = { ok: true, data: { supported: true, newer: true, maker: 'ASUS', model: 'PRIME Z790-P WIFI', site: 'asus.com', installed: '1836', latest: { version: '1901', date: '2026-10-01', size: '15 MB', url: 'https://dlcdnets.asus.com/x.zip' } } };
+// The same sample PC everywhere: a real hardware scan would add this PC's own cards and devices with
+// driver problems (a CI runner's virtual hardware has some) to what each step expects.
+const HARDWARE = { ok: true, data: {
+  amdSoftware: null, systemMaker: 'ASUS', systemModel: 'Sample PC', systemSku: null, computer: 'ASUS Sample PC',
+  board: 'ASUSTeK COMPUTER INC. PRIME Z790-P WIFI', boardMaker: 'ASUSTeK COMPUTER INC.', boardModel: 'PRIME Z790-P WIFI',
+  bios: { version: '1836', date: '2025-01-01' }, cpu: 'Intel(R) Core(TM) i7-14700K', ramGB: 32,
+  gpus: [{ name: 'NVIDIA GeForce RTX 4070', driverVersion: '32.0.15.6094', pnp: 'PCI\\VEN_10DE&DEV_2786' }], devices: [], problems: [],
+} };
+sys.scanHardware = async () => HARDWARE;
 const realJunk = sys.junkScan;
 const realStartup = sys.startupList;
 sys.driverUpdates = async () => (mode === 1 ? { ok: false, error: 'Windows Update service did not answer' } : { ok: true, data: [] });
