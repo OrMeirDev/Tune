@@ -113,7 +113,11 @@ The plan and the status of every task: `docs/roadmap/`.
   nothing (`clean` with no categories) to check who may ask, and run a console copy of the service
   with a test `ops.ps1`. Fault injection exists only in a test build of the service
   (`build-service.cjs --test-faults <folder>`, `/define:TUNE_FAULTS`), never in what ships.
-- Publishing a release needs the owner's explicit go-ahead.
+- Publishing a release needs the owner's explicit go-ahead. With it: set the version in
+  `package.json`, write `docs/release-notes/v<version>.md` (English and Hebrew), let CI pass on that
+  commit, then push the tag `v<version>`; `.github/workflows/release.yml` builds on a Windows runner and
+  publishes. A version with a pre-release part (`1.4.0-beta.1`) becomes a GitHub pre-release, which
+  installed copies don't update to by themselves.
 
 ## Audit and roadmap
 
