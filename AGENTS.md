@@ -115,8 +115,9 @@ The plan and the status of every task: `docs/roadmap/`.
   (`build-service.cjs --test-faults <folder>`, `/define:TUNE_FAULTS`), never in what ships.
 - Publishing a release needs the owner's explicit go-ahead. With it: set the version in
   `package.json`, write `docs/release-notes/v<version>.md` (English and Hebrew), let CI pass on that
-  commit, then push the tag `v<version>`; `.github/workflows/release.yml` builds on a Windows runner and
-  publishes. A version with a pre-release part (`1.4.0-beta.1`) becomes a GitHub pre-release, which
+  commit, then push the tag `v<version>` (or, where tags can't be pushed, a commit whose message
+  contains `[release v<version>]`); `.github/workflows/release.yml` builds on a Windows runner and
+  publishes, and never replaces an existing release. A version with a pre-release part (`1.4.0-beta.1`) becomes a GitHub pre-release, which
   installed copies don't update to by themselves.
 
 ## Audit and roadmap

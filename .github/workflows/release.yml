@@ -1,7 +1,10 @@
 # Publishes a release of Tune the owner asked for (AGENTS.md: publishing needs the owner's explicit
-# go-ahead). Runs only on a pushed tag v<version> that matches package.json, on a disposable Windows
-# runner: the unit tests, the build, the check of what is packed, then a GitHub release with the
-# installer and its update files, and the notes from docs/release-notes/v<version>.md.
+# go-ahead), on a disposable Windows runner: the unit tests, the build, the check of what is packed,
+# then a GitHub release with the installer and its update files, and the notes from
+# docs/release-notes/v<version>.md. It runs for a pushed tag v<version>, or for a pushed commit whose
+# message asks for it with "[release v<version>]" (where tags can't be pushed from); the tag must match
+# package.json, and a release that already exists is never replaced. For a commit, the tag is created
+# at that commit with the release.
 # A version with a pre-release part (1.4.0-beta.1) becomes a GitHub pre-release: installed copies of
 # a regular release keep updating from the latest regular release (electron-updater skips
 # pre-releases), so only people who download it get it.
@@ -12,6 +15,7 @@ name: Release
 on:
   push:
     tags: ['v*']
+    branches: ['main', 'claude/**']
 
 permissions:
   contents: write
@@ -22,6 +26,7 @@ concurrency:
 
 jobs:
   release:
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || contains(github.event.head_commit.message, '[release v') }}
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -33,13 +38,22 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-fund --no-audit
-      - name: the tag is this version, and its notes are written
+      - name: the tag is this version, its notes are written, and it isn't released yet
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           $v = (Get-Content package.json -Raw | ConvertFrom-Json).version
-          if ("v$v" -ne $env:GITHUB_REF_NAME) { throw "tag $env:GITHUB_REF_NAME does not match package.json version $v" }
+          if ($env:GITHUB_REF -like 'refs/tags/*') { $tag = $env:GITHUB_REF_NAME }
+          else { $m = [regex]::Match([string]$env:MESSAGE, '\[release (v[0-9A-Za-z.\-]+)\]'); if (-not $m.Success) { throw 'no [release v<version>] in the commit message' }; $tag = $m.Groups[1].Value }
+          if ("v$v" -ne $tag) { throw "$tag does not match package.json version $v" }
           if (-not (Test-Path "docs/release-notes/v$v.md")) { throw "no release notes at docs/release-notes/v$v.md" }
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) { throw "$tag is already released; a release is never replaced" }
+          $global:LASTEXITCODE = 0  # "not found" is what was wanted; the step must not end with it
           "VERSION=$v" >> $env:GITHUB_ENV
+          "TAG=$tag" >> $env:GITHUB_ENV
       - run: npm test
       - name: build (unsigned)
         run: npm run dist -- --publish never
@@ -53,5 +67,7 @@ jobs:
           $files = @(Get-ChildItem release -File | Where-Object { $_.Name -match '^Tune-Setup-.*\.exe(\.blockmap)?$' -or $_.Name -match '^(latest|beta|alpha)\.yml$' } | ForEach-Object FullName)
           if (-not ($files | Where-Object { $_ -match '\.exe$' })) { throw 'no installer in release/' }
           $kind = if ($env:VERSION -match '-') { '--prerelease' } else { '--latest' }
-          gh release create $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY --verify-tag --title "$env:VERSION" --notes-file "docs/release-notes/v$env:VERSION.md" $kind @files
+          # a pushed tag is used as it is; otherwise the tag is made at this commit
+          $where = if ($env:GITHUB_REF -like 'refs/tags/*') { '--verify-tag' } else { "--target=$env:GITHUB_SHA" }
+          gh release create $env:TAG --repo $env:GITHUB_REPOSITORY $where --title "$env:VERSION" --notes-file "docs/release-notes/v$env:VERSION.md" $kind @files
           if ($LASTEXITCODE) { throw "gh release create exited $LASTEXITCODE" }
