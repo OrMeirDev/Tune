@@ -36,6 +36,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-fund --no-audit
+      - run: npm audit --audit-level=moderate
       - run: npm test
       - run: npm run build
       - name: main-process syntax
@@ -114,6 +115,9 @@ jobs:
         if: ${{ !cancelled() }}
         shell: pwsh
         run: ./scripts/ci/service-deadlines-check.ps1
+      - name: durable service results after disconnect and restart (isolated console copy)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/service-journal-check.cjs
       - name: service containment (a test build that makes each native step fail in turn)
         if: ${{ !cancelled() }}
         shell: pwsh

@@ -111,5 +111,6 @@ test('the service: an operation runs only once it is contained, and its end is c
 });
 
 test('the service version moved with the service code', () => {
-  assert.equal(require(path.join(EL, 'service-version.cjs')), '8');
+  assert.ok(Number(require(path.join(EL, 'service-version.cjs'))) >= 10,
+    'the journal and timestamped sensor contract require service 10 or later');
 });
