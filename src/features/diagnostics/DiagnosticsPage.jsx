@@ -18,12 +18,12 @@ export function CenterPage({ recs, bios, gpu, junk, startup, live, history, sour
         <div><h1>{t('cc.title')}</h1><p className="subtitle">{t('cc.subtitle')}</p></div>
         <div className="header-actions">
           {recs && <div className={`score ${good === judged.length ? 'all' : ''}`} title={t('cc.scoreTitle')}><b>{ltr(`${good}/${judged.length}`)}</b> {t('cc.okCount')}</div>}
-          <button className="btn-ghost" onClick={onRefresh} disabled={!recs}><RefreshCw size={14} /> {t('pf.refresh')}</button>
+          <button className="btn-ghost" onClick={onRefresh} disabled={!recs && sources.recs !== 'error'}><RefreshCw size={14} /> {t('pf.refresh')}</button>
         </div>
       </header>
       <LiveCpu live={live} service={service} onInstallService={onInstallService} busy={rowProps.busy} />
       <section className="panel">
-        {!recs ? <div className="center-msg"><Loader2 size={16} className="spin" /> {t('loading')}</div> : GROUPS.map((g) => {
+        {!recs ? <div className={`center-msg${sources.recs === 'error' ? ' scan-failed' : ''}`} role="status">{sources.recs === 'error' ? t('rec.uncheckedNote') : <><Loader2 size={16} className="spin" /> {t('loading')}</>}</div> : GROUPS.map((g) => {
           const list = items.filter((i) => i.group === g.id).sort((a, b) => statusRank(a.ok) - statusRank(b.ok));
           if (!list.length) return null;
           const bad = list.filter((i) => i.ok === false).length;

@@ -23,9 +23,11 @@ app.on('window-all-closed', () => {});
 // The guide is conditional on CPU family and startup entries vary by image. Explicit SYNTHETIC
 // read-only fixtures keep these UI checks independent of the runner's hardware and registry.
 const sys = require(path.join(tune, 'electron', 'system.cjs'));
-sys.recommendations = async () => ({ ok: true, data: [
+let recommendationsFail = true;
+const sampleRecommendations = async () => ({ ok: true, data: [
   { key: 'powerLimit', group: 'cpu', cpuKind: 'intelHybrid', intel1314: true, ok: null, guide: 'powerLimit' },
 ] });
+sys.recommendations = async () => recommendationsFail ? { ok: false, error: 'SAMPLE first-read failure' } : sampleRecommendations();
 sys.startupList = async () => ({ ok: true, data: [
   { source: 'HKCU', key: 'TuneSmokeSample', name: 'SAMPLE startup item (not executed)', enabled: true, admin: false },
 ] });
@@ -58,6 +60,11 @@ run.guard(async () => {
   }
   // the dialogs: power-limit guide from the performance center
   await js(`[...document.querySelectorAll('.nav-item')].find((b) => /מרכז ביצועים|Performance center/.test(b.textContent))?.click()`); await wait(1500);
+  const retry = await js(`({ failed: !!document.querySelector('.scan-failed'), enabled: document.querySelector('header .btn-ghost')?.disabled === false })`);
+  check('a failed first recommendation read is explicit and retry stays available', retry?.failed && retry?.enabled, retry);
+  recommendationsFail = false;
+  await js(`document.querySelector('header .btn-ghost')?.click()`); await wait(1000);
+  check('retry recovers the recommendation page without a restart', await js(`!document.querySelector('.scan-failed') && [...document.querySelectorAll('button')].some(b => /איך עושים|How to/.test(b.textContent))`));
   await js(`[...document.querySelectorAll('button')].find((b) => /איך עושים|How to/.test(b.textContent))?.click()`); await wait(600);
   check('the power-limit guide opens', (await js(`document.querySelector('.modal h2')?.textContent || ''`)).length > 0);
   const a11y = await js(`({ role: document.querySelector('.modal')?.getAttribute('role'), labelled: !!document.getElementById(document.querySelector('.modal')?.getAttribute('aria-labelledby') || 'x'), focusInside: !!document.querySelector('.modal')?.contains(document.activeElement) })`);
