@@ -669,7 +669,7 @@ namespace Tune
                 // anything it left running ends with the job; past its limit, everything does
                 ended = EndAll(c);
                 reader.Join(OutputGraceMs);
-                if (finished) answer = Fail("operation ended without a result", null);
+                if (finished) answer = Fail("operation ended without a result; the change may have run", "noAnswer");
                 else if (ended) answer = Fail("the operation did not finish in time and was stopped", "timedOut");
                 else answer = Fail("the operation did not finish in time; Windows has not confirmed that it stopped (" + StillRunning(c) +
                     "), so no other change starts until it has", "timedOut", false);
@@ -677,7 +677,7 @@ namespace Tune
             catch (Exception e)
             {
                 ended = EndAll(c);
-                answer = Fail("the operation failed: " + e.Message, null);
+                answer = Fail("the operation result could not be confirmed: " + e.Message, "noAnswer", ended);
             }
             finally
             {

@@ -71,7 +71,7 @@ run.guard(async () => {
   const bin = path.resolve('service/bin');
   for (const name of fs.readdirSync(bin))
     if (name !== 'ops.ps1' && fs.statSync(path.join(bin, name)).isFile()) fs.copyFileSync(path.join(bin, name), path.join(root, name));
-  fs.writeFileSync(path.join(root, 'ops.ps1'), "param([string]$Request)\n$req = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Request)) | ConvertFrom-Json\nAdd-Content -LiteralPath (Join-Path $PSScriptRoot 'runs.txt') -Value 'ran'\n[Console]::Out.WriteLine('PROGRESS {\"phase\":\"test\"}')\n[Console]::Out.Flush()\nif ($req.wait) { Start-Sleep -Seconds 20 } else { Start-Sleep -Seconds 1 }\n[Console]::Out.WriteLine('RESULT {\"ok\":true,\"data\":{\"restore\":\"created\",\"reboot\":true,\"results\":[{\"id\":\"sample\",\"code\":2}]}}')\n");
+  fs.writeFileSync(path.join(root, 'ops.ps1'), "param([string]$Request)\n$req = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Request)) | ConvertFrom-Json\nAdd-Content -LiteralPath (Join-Path $PSScriptRoot 'runs.txt') -Value 'ran'\n[Console]::Out.WriteLine('PROGRESS {\"phase\":\"test\"}')\n[Console]::Out.Flush()\nif ($req.wait) { Start-Sleep -Seconds 20 } else { Start-Sleep -Seconds 1 }\nif ($req.noResult) { exit }\n[Console]::Out.WriteLine('RESULT {\"ok\":true,\"data\":{\"restore\":\"created\",\"reboot\":true,\"results\":[{\"id\":\"sample\",\"code\":2}]}}')\n");
   await start();
   const req = { op: 'hags', operationId: randomUUID() };
   run.need('disconnect only after the stand-in began', (await ask(req, true)).disconnected);
@@ -91,10 +91,13 @@ run.guard(async () => {
   await stop(); await start();
   const recovered = await status(req.operationId);
   run.check('completed result survives service restart', recovered.ok && recovered.data?.state === 'completed' && count() === 1, recovered);
+  const silent = { op: 'hags', operationId: randomUUID(), noResult: true };
+  const noResult = await ask(silent);
+  run.check('a process that changed something but lost its result stays unconfirmed', noResult.code === 'noAnswer' && (await status(silent.operationId)).data?.state === 'unknown', noResult);
   const interrupted = { op: 'hags', operationId: randomUUID(), wait: true };
   run.need('second stand-in accepted before restart', (await ask(interrupted, true)).disconnected);
   await stop(); await start();
   const pending = await status(interrupted.operationId);
   run.check('restart reports an interrupted operation without claiming a result', pending.ok && pending.data?.state === 'interrupted' && !pending.data?.result, pending);
-  run.check('status reads never replay the interrupted operation', count() === 2, count());
+  run.check('status reads never replay the interrupted operation', count() === 3, count());
 });

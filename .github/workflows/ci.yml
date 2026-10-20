@@ -116,6 +116,10 @@ jobs:
         run: npm run dist -- --publish never
       - name: packed contents; development licensing overrides ignored
         run: node scripts/ci/packaged-check.cjs
+      - name: real DPAPI across two Windows users (synthetic licence)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: ./scripts/ci/dpapi-users-check.ps1
       - name: service deadlines (a console copy with a hanging test operation)
         if: ${{ !cancelled() }}
         shell: pwsh
