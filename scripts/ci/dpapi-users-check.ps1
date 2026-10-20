@@ -14,12 +14,15 @@ try {
   if ($LASTEXITCODE) { throw 'could not create disposable DPAPI account' }
   $created = $true
   $cred = New-Object Management.Automation.PSCredential($user, (ConvertTo-SecureString $pw -AsPlainText -Force))
+  # Electron 44 downloads its runtime on first use; packaging alone uses builder's separate copy.
+  node node_modules/electron/install.js
+  if ($LASTEXITCODE) { throw 'could not prepare the Electron test runtime' }
   $exe = (Resolve-Path node_modules/electron/dist/electron.exe).Path
   $probe = (Resolve-Path scripts/ci/dpapi-user-probe.cjs).Path
   $file = Join-Path $root 'license.bin'
   function Probe([string]$mode, $credential) {
     $out = Join-Path $root "$mode.json"
-    $options = @{ FilePath = $exe; ArgumentList = @('"' + $probe + '"', $mode, '"' + $file + '"'); WorkingDirectory = $root; RedirectStandardOutput = $out; RedirectStandardError = (Join-Path $root "$mode.stderr"); PassThru = $true; WindowStyle = 'Hidden' }
+    $options = @{ FilePath = $exe; ArgumentList = ('"' + $probe + '" ' + $mode + ' "' + $file + '"'); WorkingDirectory = $root; RedirectStandardOutput = $out; RedirectStandardError = (Join-Path $root "$mode.stderr"); PassThru = $true; WindowStyle = 'Hidden' }
     if ($credential) { $options.Credential = $credential; $options.LoadUserProfile = $true }
     $p = Start-Process @options
     if (-not $p.WaitForExit(45000)) { $p.Kill(); throw "$mode probe exceeded its deadline" }

@@ -104,6 +104,7 @@ jobs:
         run: |
           $c = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Tune CI throwaway signing' -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(1)
           $pw = [guid]::NewGuid().ToString()
+          Write-Output "::add-mask::$pw"
           $pfx = Join-Path $env:RUNNER_TEMP 'ci-signing.pfx'
           Export-PfxCertificate -Cert $c -FilePath $pfx -Password (ConvertTo-SecureString $pw -AsPlainText -Force) | Out-Null
           foreach ($name in 'Root', 'TrustedPublisher') {
