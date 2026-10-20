@@ -17,7 +17,7 @@ export function sourcesFrom({ hw, wu, gpu, bios }) {
     wu: wu?.ok ? 'ok' : 'error',
     // without the hardware scan there is nothing to check the graphics driver against; and the
     // check answered only if no card in it failed (each card carries its own status)
-    gpu: !hw?.ok || !gpu?.ok || [].concat(gpu.data || []).some((g) => g?.status === 'error' || g?.error) ? 'error' : 'ok',
+    gpu: !hw?.ok || !gpu?.ok || [].concat(gpu.data || []).some((g) => g?.status === 'error' || g?.error || g?.installerKind === 'autodetect') ? 'error' : 'ok',
     // a maker's catalog that failed comes back as ok with an error field
     bios: !bios?.ok || bios.data?.error ? 'error' : bios.data?.supported === false ? 'unsupported' : 'ok',
   };

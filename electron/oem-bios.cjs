@@ -8,20 +8,13 @@ const os = require('os');
 const path = require('path');
 const { vendorFetch, boundedBody } = require('./infra/vendor-fetch.cjs');
 
+const { compareFirmware: cmpVer, dellId, supportsDell, lenovoInstallerMatches } = require('./domain/catalog-policy.cjs');
+
 const UA = { 'User-Agent': 'Mozilla/5.0' };
 // Catalog requests are bounded: a time limit, and a size ceiling for the downloaded catalogs.
 const CATALOG_TIMEOUT_MS = 30000;
 const CATALOG_MAX_BYTES = 200 * 1024 * 1024;
 
-const cmpVer = (a, b) => {
-  const x = String(a || '').split('.').map((n) => parseInt(n, 10) || 0);
-  const y = String(b || '').split('.').map((n) => parseInt(n, 10) || 0);
-  for (let i = 0; i < Math.max(x.length, y.length); i++) {
-    const d = (x[i] || 0) - (y[i] || 0);
-    if (d) return d;
-  }
-  return 0;
-};
 
 async function getText(url) {
   const r = await vendorFetch(url, { headers: UA, signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS) });
@@ -55,32 +48,40 @@ const tag = (xml, name) => (xml.match(new RegExp(`<${name}[^>]*>([\\s\\S]*?)</${
 // descriptor per package. The installed BIOS shows its version in brackets: "N32ET86W (1.62 )".
 async function lenovo(model, biosString) {
   const mtm = String(model || '').slice(0, 4).toUpperCase();
+  if (!/^[A-Z0-9]{4}$/.test(mtm)) return null;
   const installed = (String(biosString).match(/\(\s*([\d.]+)\s*\)/) || [])[1] || biosString;
-  const catalog = await getText(`https://download.lenovo.com/catalog/${mtm}_Win11.xml`).catch(() => getText(`https://download.lenovo.com/catalog/${mtm}_Win10.xml`));
-  const pkg = [...catalog.matchAll(/<package>([\s\S]*?)<\/package>/g)].map((m) => m[1]).find((p) => /<category>BIOS/i.test(p));
-  if (!pkg) return null;
+  const win = Number(os.release().split('.')[2]) >= 22000 ? 'Win11' : 'Win10';
+  const catalog = await getText(`https://download.lenovo.com/catalog/${mtm}_${win}.xml`);
+  const packages = [...catalog.matchAll(/<package>([\s\S]*?)<\/package>/g)].map(m => m[1]).filter(p => /<category>BIOS/i.test(p));
+  if (!packages.length) return null;
+  const candidates = [];
+  for (const pkg of packages.slice(0, 12)) {
   const descUrl = tag(pkg, 'location');
   const desc = await getText(descUrl);
   const version = (desc.match(/<Package [^>]*version="([^"]+)"/) || [])[1];
   const installer = (desc.match(/<Installer>[\s\S]*?<\/Installer>/) || [])[0] || '';
   const file = tag(installer, 'Name');
-  if (!version || !file) return null;
-  return {
+  if (!version || !lenovoInstallerMatches(biosString, file)) continue;
+  candidates.push({
     installed, newer: cmpVer(version, installed) > 0, site: 'lenovo.com', page: `https://pcsupport.lenovo.com/search?query=${encodeURIComponent(mtm)}`,
     latest: { version, date: tag(desc, 'ReleaseDate'), size: `${(Number(tag(installer, 'Size')) / 1e6).toFixed(1)} MB`, url: new URL(file, descUrl).href, sha256: tag(installer, 'CRC'), notes: tag(desc, 'Desc') },
-  };
+  });
+  }
+  return candidates.sort((a, b) => cmpVer(b.latest.version, a.latest.version) || 0)[0] || null;
 }
 
 // Dell: an index of every system (by the SKU Windows reports, e.g. 07E8) pointing at its own catalog.
 async function dell(sku, biosVersion) {
+  const id = dellId(sku);
+  if (!id) return null;
   const index = await getCab('https://downloads.dell.com/catalog/CatalogIndexPC.cab');
   const group = [...index.matchAll(/<GroupManifest[\s\S]*?<\/GroupManifest>/g)].map((m) => m[0])
-    .find((g) => new RegExp(`systemID="${String(sku).replace(/[^0-9A-Za-z]/g, '')}"`, 'i').test(g));
+    .find((g) => new RegExp(`systemID="${id}"`, 'i').test(g));
   if (!group) return null;
   const manifest = (group.match(/<ManifestInformation[^>]*path="([^"]+)"/) || [])[1];
   const catalog = await getCab(`https://downloads.dell.com/${manifest}`);
   const bios = [...catalog.matchAll(/<SoftwareComponent[\s\S]*?<\/SoftwareComponent>/g)].map((m) => m[0])
-    .filter((c) => /<ComponentType value="BIOS"/.test(c))
+    .filter((c) => /<ComponentType\b[^>]*value="BIOS"/i.test(c) && supportsDell(c, id))
     .map((c) => ({ c, version: (c.match(/vendorVersion="([^"]+)"/) || [])[1] }))
     .sort((a, b) => cmpVer(b.version, a.version))[0];
   if (!bios) return null;
@@ -97,7 +98,8 @@ async function dell(sku, biosVersion) {
 // HP: a platform list (by the board ID Windows reports, e.g. 81C5), then one catalog per Windows
 // release. The BIOS entry for this PC is the one whose BIOS family matches ("P61 Ver. 02.97").
 async function hp(systemId, biosString) {
-  const sid = String(systemId).replace(/[^0-9A-Za-z]/g, '').toLowerCase();
+  const sid = dellId(systemId)?.toLowerCase();
+  if (!sid) return null;
   const family = (String(biosString).match(/^([A-Z]\d{2})/i) || [])[1];
   const installed = (String(biosString).match(/(\d+\.\d+(?:\.\d+)?)/) || [])[1];
   const list = await getCab('https://hpia.hpcloud.hp.com/ref/platformList.cab');
@@ -105,7 +107,7 @@ async function hp(systemId, biosString) {
   if (!platform || !family) return null;
   const win11 = Number(os.release().split('.')[2]) >= 22000;
   const releases = [...platform.matchAll(/<OS [\s\S]*?<\/OS>/g)].map((m) => m[0])
-    .filter((o) => /<IsWindows11>(\w+)</.exec(o)?.[1] === String(win11)).map((o) => tag(o, 'OSReleaseIdFilename')).filter(Boolean);
+    .filter((o) => /<IsWindows11>(\w+)</.exec(o)?.[1]?.toLowerCase() === String(win11)).map((o) => tag(o, 'OSReleaseIdFilename')).filter(Boolean);
   const release = releases.sort().pop();
   if (!release) return null;
   const catalog = await getCab(`https://hpia.hpcloud.hp.com/ref/${sid}/${sid}_64_${win11 ? '11' : '10'}.0.${release.toLowerCase()}.cab`);
@@ -126,11 +128,20 @@ async function oemBios({ systemMaker = '', systemModel = '', systemSku = '', mod
   else if (/dell/i.test(systemMaker)) r = await dell(systemSku, version);
   else if (/^hp\b|hewlett/i.test(systemMaker)) r = await hp(model, version);
   else return null;
-  if (!r) return null;
+  if (!r) return { installed: version, supported: false, newer: false,
+    page: /lenovo/i.test(systemMaker) ? 'https://pcsupport.lenovo.com/' : /dell/i.test(systemMaker) ? 'https://www.dell.com/support/home/en-us?app=drivers' : 'https://support.hp.com/drivers',
+    error: 'The catalog did not establish a matching BIOS for this firmware family and model.' };
+  if (cmpVer(r.latest?.version, r.installed) == null) return { ...r, newer: false, latest: null, error: 'The installed and offered BIOS versions cannot be compared reliably.' };
   // A catalog field is taken as the file's SHA-256 only if it looks like one: Lenovo calls the
   // field "CRC", and a value that isn't 64 hex characters means "no usable hash" (the download is
   // then refused), never a false match.
-  if (r.latest) r.latest = { ...r.latest, sha256: sha256Or(r.latest.sha256) };
+  if (r.latest) {
+    const host = /lenovo/i.test(systemMaker) ? ['download.lenovo.com'] : /dell/i.test(systemMaker) ? ['downloads.dell.com', 'dl.dell.com'] : ['ftp.hp.com', 'ftp.ext.hp.com'];
+    const { allowedAddress } = require('./domain/download-policy.cjs');
+    if (!allowedAddress(r.latest.url, host) || !/\.exe(?:\?|$)/i.test(r.latest.url)) return { ...r, latest: null, newer: false, error: 'The catalog did not provide an official installer for this manufacturer.' };
+    r.latest = { ...r.latest, sha256: sha256Or(r.latest.sha256) };
+    if (!r.latest.sha256) r.error = 'The catalog did not provide a valid SHA-256 for this BIOS.';
+  }
   return { ...r, maker: /lenovo/i.test(systemMaker) ? 'Lenovo' : /dell/i.test(systemMaker) ? 'Dell' : 'HP', model: systemModel };
 }
 const sha256Or = (v) => (/^[0-9a-f]{64}$/i.test(String(v || '').trim()) ? String(v).trim().toLowerCase() : null);

@@ -25,7 +25,8 @@ export function UpdatesPage({ hw, wu, gpu, bios, sources, scan, soundKey, onScan
     const h = (u.hwid || '').toUpperCase();
     return devByHwid.get(h) || (hw?.devices || []).find((d) => d.hwid && (d.hwid.toUpperCase().startsWith(h) || h.startsWith(d.hwid.toUpperCase())));
   };
-  const gpuNewer = (gpu || []).filter((g) => g.newer && g.url);
+  const gpuNewer = (gpu || []).filter((g) => g.newer && g.url && g.installerKind !== 'autodetect');
+  const autoDetect = (gpu || []).filter(g => g.installerKind === 'autodetect' && g.url);
   const biosNewer = bios?.supported && bios.newer && bios.latest?.url ? bios : null;
   const problems = hw?.problems || [];
   const total = (wu?.length || 0) + gpuNewer.length + (biosNewer ? 1 : 0);
@@ -105,6 +106,11 @@ export function UpdatesPage({ hw, wu, gpu, bios, sources, scan, soundKey, onScan
             </div>
           </div>
         ))}
+        {autoDetect.map(g => <div key={g.gpu} className="drow">
+          <span className="dicon"><Monitor size={17} /></span>
+          <div style={{ minWidth: 0 }}><div className="dname"><bdi>{g.gpu}</bdi></div><div className="dmeta">{t('up.amdAutoDetect')}</div></div>
+          <div className="acts"><button className="btn-ghost" onClick={() => onGpu(g)} disabled={!!busy}><Download size={14} /> {t('up.amdOpen')}</button></div>
+        </div>)}
         {(gpu || []).filter((g) => g.vendor === 'Intel').map((g) => (
           <div key={g.gpu} className="drow">
             <span className="dicon"><Monitor size={17} /></span>

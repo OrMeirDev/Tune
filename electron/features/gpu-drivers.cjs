@@ -2,6 +2,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { nvidiaPackageMatches } = require('../domain/catalog-policy.cjs');
 const { cmpVer } = require('../domain/versions.cjs');
 const { downloadFile } = require('../infra/download.cjs');
 const { runPS } = require('../infra/powershell.cjs');
@@ -31,9 +32,9 @@ async function gpuVendorCheck(gpus, amdSoftware) {
         if (!ver) throw new Error("no driver link on AMD's page");
         out.push({
           status: 'ok', gpu: g.name, vendor: 'AMD', installed: g.driverVersion, package: amdSoftware || null, latest: ver || null, url: url || null,
-          title: ver ? `AMD Software ${ver}` : null,
+          title: ver ? `AMD Software ${ver}` : null, installerKind: 'autodetect',
           // Unknown package version: offer it rather than hide a possible update.
-          newer: !!ver && (!amdSoftware || cmpVer(ver, amdSoftware) > 0),
+          newer: false, // the generic tool establishes applicability itself, not this catalog check
           page: 'https://www.amd.com/en/support/download/drivers.html',
         });
       } catch (e) {
@@ -73,6 +74,7 @@ async function nvidiaCheck(g) {
     const j = await (await makerFetch(`https://gfwsl.geforce.com/services_toolkit/services/com/nvidia/services/AjaxDriverService.php?func=DriverManualLookup&psid=${p.psid}&pfid=${p.pfid}&osID=${osId}&languageCode=1033&isWHQL=1&dch=1&sort1=0&numberOfResults=1`)).json();
     const d = j?.IDS?.[0]?.downloadInfo;
     if (!d?.Version || !d.DownloadURL) throw new Error("no driver in NVIDIA's answer");
+    if (!nvidiaPackageMatches(d, { gpu: g.name, windows11: osId === 135, arch: process.arch })) throw new Error("NVIDIA's package did not match the requested driver version, Windows or device type");
     // Windows shows NVIDIA drivers as 32.0.15.6636; NVIDIA calls that 566.36 (the last five digits).
     const digits = String(g.driverVersion || '').split('.').slice(-2).join('');
     const installed = digits.length >= 5 ? `${digits.slice(-5, -2)}.${digits.slice(-2)}` : null;

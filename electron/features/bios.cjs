@@ -1,7 +1,7 @@
 // BIOS updates from the board or PC maker's official catalog.
 const fs = require('fs');
 const path = require('path');
-const { cmpVer } = require('../domain/versions.cjs');
+const { compareFirmware: cmpVer, asusFileMatches } = require('../domain/catalog-policy.cjs');
 const { downloadFile } = require('../infra/download.cjs');
 const { runPS } = require('../infra/powershell.cjs');
 const { vendorFetch, boundedBody } = require('../infra/vendor-fetch.cjs');
@@ -16,14 +16,16 @@ async function biosCheck(board) {
     // Brand-name PCs (Lenovo, Dell, HP): the maker's update catalog; others: a search on their site.
     try {
       const oem = await oemBios(board);
-      return { ok: true, data: oem ? { ...base, ...oem, installedDate: date, supported: !!oem.latest?.url, flash: 'windows' } : base };
+      return { ok: true, data: oem ? { ...base, ...oem, installedDate: date, supported: !!oem.latest?.url && !!sha256Or(oem.latest?.sha256), flash: 'windows' } : base };
     } catch (e) {
       return { ok: true, data: { ...base, error: String(e.message || e) } };
     }
   }
   if (!model) return { ok: true, data: base };
   try {
-    const files = await asusBiosFiles(model);
+    const listed = await asusBiosFiles(model);
+    const files = listed.filter(f => asusFileMatches(model, f.Version, /^https?:/i.test(f.DownloadUrl?.Global || '') ? f.DownloadUrl.Global : ASUS_DOWNLOADS + (f.DownloadUrl?.Global || '')));
+    if (listed.length && !files.length) throw new Error('ASUS catalog packages did not match the exact board model and BIOS version');
     if (!files.length) return { ok: true, data: base };
     const newest = (list) => list.reduce((a, b) => (cmpVer(b.Version, a.Version) > 0 ? b : a));
     // Only stable releases are offered; a beta is mentioned, never recommended.
@@ -38,8 +40,9 @@ async function biosCheck(board) {
     return {
       ok: true,
       data: {
-        ...base, supported: !!f, maker: 'ASUS', site: 'asus.com', flash: 'ezflash',
+        ...base, supported: !!f && !!sha256Or(f.sha256), maker: 'ASUS', site: 'asus.com', flash: 'ezflash',
         newer: !!f && cmpVer(f.Version, version) > 0,
+        error: f && cmpVer(f.Version, version) == null ? 'The installed and offered BIOS versions cannot be compared reliably.' : f && !sha256Or(f.sha256) ? 'The catalog did not provide a valid SHA-256 for this BIOS.' : null,
         // Installed a beta that is newer than the latest stable release: up to date, and said so.
         onBeta: !!f && cmpVer(version, f.Version) > 0,
         beta: String(beta.IsRelease) === '0' && (!f || cmpVer(beta.Version, f.Version) > 0) && cmpVer(beta.Version, version) > 0 ? info(beta) : null,
