@@ -78,7 +78,7 @@ test('the service: read-only questions for everyone, changes only for administra
 test('the service: an operation runs only once it is contained, and its end is confirmed', () => {
   const cs = fs.readFileSync(path.join(__dirname, '..', 'service', 'TuneService.cs'), 'utf8');
   const contain = cs.slice(cs.indexOf('string Contain('), cs.indexOf('static int ActiveProcesses('));
-  const run = cs.slice(cs.indexOf('void RunOperation('), cs.indexOf('// Lines from the operation'));
+  const run = cs.slice(cs.indexOf('string RunOperation('), cs.indexOf('// Lines from the operation'));
   const at = (src, s) => { const i = src.indexOf(s); assert.ok(i >= 0, s); return i; };
   // created suspended, then put in the job (checked); resumed only in RunOperation, after Contain succeeded
   assert.match(contain, /CreateProcess\(ps, command, IntPtr\.Zero, IntPtr\.Zero, true, CreateSuspended \| CreateNoWindow/);

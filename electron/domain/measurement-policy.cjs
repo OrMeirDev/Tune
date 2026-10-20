@@ -34,7 +34,7 @@ const REST_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 // only those taken after the previous such change and before the next one, so an effect is never
 // credited to the wrong change. A cleanup only deletes files (it has its own before/after pair);
 // downloads and restore points change nothing that is measured.
-const BOUNDARIES = ['startup', 'setting', 'drivers', 'enable', 'service'];
+const BOUNDARIES = ['startup', 'setting', 'drivers', 'enable', 'service', 'serviceOperation'];
 // What a change could have affected, and how the "after" is taken (see actionComparisons).
 const EFFECTS = {
   clean: { metrics: ['diskFreeBytes'], paired: true },

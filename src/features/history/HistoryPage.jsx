@@ -12,7 +12,18 @@ export function HistoryPage({ busy, onRestorePoint, measured }) {
   const [items, setItems] = useState([]);
   const [effects, setEffects] = useState(new Map());
   // Skip anything that isn't a Tune entry, so one malformed line can't take the whole page down.
-  useEffect(() => { api.getHistory().then((list) => setItems([].concat(list || []).filter((h) => h && h.action && h.detail))); }, [busy]);
+  useEffect(() => {
+    let stopped = false, timer;
+    const load = async () => {
+      try {
+        const list = await api.getHistory();
+        if (!stopped) setItems([].concat(list || []).filter(h => h && h.action && h.detail));
+      } catch {}
+      if (!stopped) timer = setTimeout(load, 5000);
+    };
+    load();
+    return () => { stopped = true; clearTimeout(timer); };
+  }, [busy]);
   // what each change did, matched to its entry by ID (or, for older entries, by kind and time)
   useEffect(() => {
     api.measureList?.().then((r) => {
@@ -36,6 +47,9 @@ export function HistoryPage({ busy, onRestorePoint, measured }) {
             <div style={{ minWidth: 0 }}>
               <div className="dname" style={{ whiteSpace: 'normal' }}>{describeChange(h, t)}</div>
               <div className="dmeta">{fmtDate(h.at, t)}</div>
+              {h.detail.operationState && <div className="dmeta">{t(['running', 'unknown', 'interrupted'].includes(h.detail.operationState) ? 'h.unknownHint' : 'h.recordedHint')}</div>}
+              {h.detail.result?.error && <div className="dmeta">{h.detail.result.error}</div>}
+              {h.detail.result?.data?.reboot && <div className="dmeta">{t('h.reboot')}</div>}
               <ChangeEffect change={effects.get(h.id || `${h.action}|${h.at}`)} />
             </div>
             <span />

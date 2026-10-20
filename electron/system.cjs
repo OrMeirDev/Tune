@@ -16,7 +16,7 @@ const { createRestorePoint, openSystemRestore } = require('./features/restore.cj
 const { performance, sensors } = require('./features/sensors.cjs');
 const { startupList, startupToggle } = require('./features/startup.cjs');
 const { adminStatus, adminStart, adminStop } = require('./privilege/admin-session.cjs');
-const { serviceStatus, installService, uninstallService, serviceOpsScript, SERVICE_VERSION } = require('./privilege/service.cjs');
+const { setOperationStore, operationHistory, operationHistoryView, serviceStatus, installService, uninstallService, serviceOpsScript, SERVICE_VERSION } = require('./privilege/service.cjs');
 
 module.exports = {
   scanHardware, driverUpdates, gpuVendorCheck, downloadGpuInstaller, installDrivers, enableDevice,
@@ -25,5 +25,5 @@ module.exports = {
   diskFree, restMeasure, bootInfo,
   memChannel, ratedFromPart, advise,
   createRestorePoint, openSystemRestore, adminStatus, adminStart, adminStop,
-  serviceStatus, installService, uninstallService, serviceOpsScript, SERVICE_VERSION,
+  setOperationStore, operationHistory, operationHistoryView, serviceStatus, installService, uninstallService, serviceOpsScript, SERVICE_VERSION,
 };

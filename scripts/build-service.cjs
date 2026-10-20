@@ -106,7 +106,7 @@ function compile(exe, defines = []) {
     fs.writeFileSync(path.join(gen, 'BuildInfo.g.cs'), buildInfo(version));
     execFileSync(csc(), ['/nologo', '/optimize+', '/target:exe', '/platform:anycpu', `/out:${exe}`, ...defines.map((d) => `/define:${d}`),
       '/r:System.ServiceProcess.dll', '/r:System.Web.Extensions.dll', '/r:System.Core.dll',
-      ...LHM.files.map((f) => `/r:${path.join(out, f)}`), path.join(root, 'service', 'TuneService.cs'), path.join(gen, 'BuildInfo.g.cs')], { stdio: 'inherit' });
+      ...LHM.files.map((f) => `/r:${path.join(out, f)}`), path.join(root, 'service', 'TuneService.cs'), path.join(root, 'service', 'OperationJournal.cs'), path.join(gen, 'BuildInfo.g.cs')], { stdio: 'inherit' });
   } finally {
     fs.rmSync(gen, { recursive: true, force: true });
   }
