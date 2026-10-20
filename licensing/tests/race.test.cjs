@@ -5,41 +5,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
 const { setup, pc, idemKey } = require('./helpers.cjs');
 
 const WORKER = path.join(__dirname, 'race-worker.cjs');
 const SERVER = path.join(__dirname, '..', 'server.cjs');
 
-// Starts a child and resolves with it once `isReady(line)` sees a line on its stdout; later lines
-// go to child.lines.
-function startChild(file, env, isReady) {
-  const child = spawn(process.execPath, [file], { env: { ...process.env, NODE_NO_WARNINGS: '1', ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
-  child.lines = [];
-  let err = '';
-  child.stderr.on('data', (d) => { err += d; });
-  child.exited = new Promise((resolve) => child.on('exit', resolve));
-  return new Promise((resolve, reject) => {
-    let buf = '';
-    let ready = false;
-    child.stdout.on('data', (d) => {
-      buf += d;
-      let i;
-      while ((i = buf.indexOf('\n')) >= 0) {
-        const line = buf.slice(0, i);
-        buf = buf.slice(i + 1);
-        if (!ready && isReady(line)) { ready = true; child.readyLine = line; resolve(child); } else child.lines.push(line);
-      }
-    });
-    child.on('exit', (code) => { if (!ready) reject(new Error(`child exited (${code}) before ready: ${err}`)); });
-  });
-}
-
-const nextLine = (child) => new Promise((resolve, reject) => {
-  if (child.lines.length) { resolve(child.lines.shift()); return; }
-  const t = setInterval(() => { if (child.lines.length) { clearInterval(t); resolve(child.lines.shift()); } }, 5);
-  child.once('exit', () => { clearInterval(t); if (child.lines.length) resolve(child.lines.shift()); else reject(new Error('child exited without answering')); });
-});
+const { startChild, nextLine } = require('./process-output.cjs');
 
 test('8 processes redeem the same 5 codes at once: one license per code, the rest already_redeemed', async (t) => {
   const env = setup(t, { now: Date.now });
