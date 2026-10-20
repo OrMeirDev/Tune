@@ -6,6 +6,7 @@ const os = require('os');
 const { bootFacts, bootRecords, bootTimingStatus, latestByMetric, summarizeRest } = require('../domain/measurement-policy.cjs');
 const { runPS } = require('../infra/powershell.cjs');
 const { serviceCall } = require('../privilege/service.cjs');
+const { sensorSnapshot } = require('../domain/sensor-policy.cjs');
 
 // Free space on the system drive as the file system reports it (no PowerShell, so it is quick
 // enough to take right before and right after a cleanup). null when it can't be read.
@@ -43,8 +44,9 @@ async function restMeasure({ seconds = 20, everyMs = 2000, onProgress, wait = sl
     const cpuLoad = cur.total > prev.total ? Math.round(100 * (1 - (cur.idle - prev.idle) / (cur.total - prev.total))) : null;
     prev = cur;
     const s = await serviceCall({ op: 'sensors' }, { timeoutMs: 1500 });
-    const cpuTempC = s && s.ok && typeof s.data?.cpuTempC === 'number' ? s.data.cpuTempC : null;
-    if (cpuTempC == null) sensor = !s ? 'noService' : (s.ok && s.data?.cpuNote) || 'noSensor';
+    const reading = sensorSnapshot(s?.ok ? s.data : null);
+    const cpuTempC = reading.cpuTempC;
+    if (cpuTempC == null) sensor = !s ? 'noService' : reading.cpuNote || 'noSensor';
     samples.push({ cpuLoad, cpuTempC, ramUsedBytes: os.totalmem() - os.freemem() });
     if (onProgress) onProgress({ phase: 'measure', percent: Math.round(((i + 1) / n) * 100) });
   }

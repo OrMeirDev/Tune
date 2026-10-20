@@ -723,10 +723,18 @@ namespace Tune
             if (power != null && power.Value.Value > 0 && power.Value.Value < 1000) r["cpuPowerW"] = Round(power.Value.Value);
             var volt = Find(h, SensorType.Voltage, s => s.Name == "CPU Core")
                 ?? Find(h, SensorType.Voltage, s => s.Name.Contains("SVI") && s.Name.StartsWith("Core"));
+            string voltageSource = "core";
             if (volt == null)
+            {
+                voltageSource = "vid";
                 foreach (var s in h.Sensors)
                     if (s.SensorType == SensorType.Voltage && s.Value.HasValue && s.Name.Contains("VID") && (volt == null || s.Value.Value > volt.Value.Value)) volt = s;
-            if (volt != null && volt.Value.Value > 0.3 && volt.Value.Value < 2.0) r["cpuVoltageV"] = Math.Round(volt.Value.Value, 3);
+            }
+            if (volt != null && volt.Value.Value > 0.3 && volt.Value.Value < 2.0)
+            {
+                r["cpuVoltageV"] = Math.Round(volt.Value.Value, 3);
+                r["cpuVoltageSource"] = voltageSource;
+            }
             float clock = 0;
             foreach (var s in h.Sensors)
                 if (s.SensorType == SensorType.Clock && s.Value.HasValue && s.Name.Contains("Core") && s.Value.Value > clock && s.Value.Value < 10000) clock = s.Value.Value;
@@ -773,6 +781,8 @@ namespace Tune
             var gpus = new List<object>();
             lock (SensorLock)
             {
+                // Stamp before Update, so a slow hardware query does not masquerade as fresh.
+                r["sampledAt"] = DateTime.UtcNow.ToString("o");
                 var hw = All(Hw().Hardware).ToList();
                 foreach (var h in Hw().Hardware) h.Update();
                 foreach (var h in hw)

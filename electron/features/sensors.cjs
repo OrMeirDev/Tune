@@ -2,6 +2,7 @@
 const os = require('os');
 const { runPS } = require('../infra/powershell.cjs');
 const { serviceCall } = require('../privilege/service.cjs');
+const { sensorSnapshot, mergeGpuReadings } = require('../domain/sensor-policy.cjs');
 
 // GPU temperature and fan speed straight from the Windows graphics kernel (the numbers Task
 // Manager shows), so no extra driver is needed. CPU and coolant sensors are not reachable this way.
@@ -61,13 +62,9 @@ $result = @{ cpuLoad = [math]::Round($load); ramTotalGB = [math]::Round($os.Tota
 // The CPU readings from the service's answer: temperature, and (service 4 and later) package power,
 // core voltage and the fastest core's clock.
 const liveCpu = (s) => {
-  const d = s && s.ok ? s.data : {};
+  const { gpus, ...d } = sensorSnapshot(s?.ok ? s.data : null);
   return {
-    cpuTempC: d.cpuTempC ?? null,
-    cpuPowerW: d.cpuPowerW ?? null,
-    cpuVoltageV: d.cpuVoltageV ?? null,
-    cpuClockMHz: d.cpuClockMHz ?? null,
-    powerLimits: d.powerLimits ?? null,
+    ...d,
     cpuNote: !s ? 'no service' : s.ok ? d.cpuNote : s.error,
   };
 };
@@ -97,10 +94,10 @@ async function sensors() {
 async function performance() {
   const [r, s] = await Promise.all([perfPS(), serviceCall({ op: 'sensors' }, { timeoutMs: 8000 })]);
   if (!r.ok) return r;
-  const d = s && s.ok ? s.data : {};
+  const d = sensorSnapshot(s?.ok ? s.data : null);
   Object.assign(r.data, liveCpu(s));
   // The service also knows the GPU hot spot; keep Windows' reading when the service isn't there.
-  if ([].concat(d.gpus || []).length) r.data.gpuTemps = [].concat(d.gpus).map((g, i) => ({ ...g, fanRpm: r.data.gpuTemps?.[i]?.fanRpm ?? null }));
+  if ([].concat(d.gpus || []).length) r.data.gpuTemps = mergeGpuReadings([].concat(d.gpus), r.data.gpuTemps);
   return r;
 }
 

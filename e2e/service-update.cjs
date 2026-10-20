@@ -10,7 +10,7 @@
 //    Settings keeps the reminder
 // 4) Update, cancelled at the prompt: Settings says so, the reminder stays, Settings stays usable
 // 5) Update that fails: said with its reason; the reminder stays
-// 6) Update that works: once version 8 answers, the reminder and the notice are gone and changes go to
+// 6) Update that works: once the current version answers, the reminder and the notice are gone and changes go to
 //    the service
 // 7) another old version later (6): the notice again, in Hebrew, right to left; Escape is "Later"
 const net = require('net');
@@ -29,6 +29,7 @@ const os = require('os');
 const path = require('path');
 const { createRun } = require('./harness.cjs');
 const { createCapture } = require('./capture.cjs');
+const CURRENT = require('../electron/privilege/service-version.cjs');
 
 const APP_DIR = path.join(__dirname, '..');
 const PRIV = path.join(APP_DIR, 'electron', 'privilege');
@@ -88,7 +89,7 @@ run.guard(async () => {
   // 1) at start
   let n = await until(notice, (v) => !!v);
   need('1 the notice appears for the older service', !!n, n);
-  check('1 it names the installed and the needed version', /version 7/.test(n.text) && /version 8/.test(n.text), n.text);
+  check('1 it names the installed and the needed version', /version 7/.test(n.text) && n.text.includes(`version ${CURRENT}`), n.text);
   check("1 it says changes go through Windows' prompt meanwhile, and that the old service stays reachable until updated", /approval prompt/.test(n.text) && /other programs on this PC can still ask it/.test(n.text), n.text);
   // the dialog moves focus in once it has mounted
   n = await until(notice, (v) => v && v.focus === 'Update', 5000);
@@ -109,14 +110,14 @@ run.guard(async () => {
   await clickIn('.service-notice', 'Later');
   n = await until(notice, (v) => !v);
   check('3 Later closes the notice', !n, n);
-  check('3 the main process remembers Later for this pair of versions', savedLater() === '7>8', savedLater());
+  check('3 the main process remembers Later for this pair of versions', savedLater() === `7>${CURRENT}`, savedLater());
   win.webContents.reload();
   await ready();
   await wait(2500);
   check('3 after a reload the notice stays closed', !(await notice()));
   await settings();
-  let c = await until(card, (v) => v && /version 7; this Tune needs version 8/.test(v.text));
-  need('3 Settings keeps the reminder', /version 7; this Tune needs version 8/.test(c?.text || ''), c?.text);
+  let c = await until(card, (v) => v && v.text.includes(`version 7; this Tune needs version ${CURRENT}`));
+  need('3 Settings keeps the reminder', (c?.text || '').includes(`version 7; this Tune needs version ${CURRENT}`), c?.text);
   await shot('3-en-settings-reminder.png');
 
   // 4) Update, cancelled at the prompt
@@ -124,7 +125,7 @@ run.guard(async () => {
   await clickIn('.setting', 'Update & start');
   c = await until(card, (v) => v && /cancelled at the approval prompt/.test(v.text));
   check('4 cancelled: Settings says so and the previous service is unchanged', /cancelled at the approval prompt/.test(c?.text || '') && /unchanged/.test(c.text), c?.text);
-  check('4 the reminder stays', /version 7; this Tune needs version 8/.test(c?.text || ''), c?.text);
+  check('4 the reminder stays', (c?.text || '').includes(`version 7; this Tune needs version ${CURRENT}`), c?.text);
   check('4 Settings stays usable (its buttons are enabled)', c?.buttons.length >= 2 && c.buttons.every((b) => !b.disabled), c?.buttons);
   check('4 the update ran only because of the click', installs === 1, installs);
 
@@ -132,13 +133,13 @@ run.guard(async () => {
   installOutcome = () => ({ ok: false, error: 'the new background service did not start; the previous version was restored' });
   await clickIn('.setting', 'Update & start');
   c = await until(card, (v) => v && /didn't finish/.test(v.text));
-  check('5 failed: said with its reason; the reminder stays', /didn't finish \(the new background service did not start; the previous version was restored\)/.test(c?.text || '') && /needs version 8/.test(c.text), c?.text);
+  check('5 failed: said with its reason; the reminder stays', /didn't finish \(the new background service did not start; the previous version was restored\)/.test(c?.text || '') && c.text.includes(`needs version ${CURRENT}`), c?.text);
 
   // 6) Update that works
-  installOutcome = () => { svc.version = '8'; return { ok: true, data: { service: 'TuneService', version: '8', pawnio: 'present' } }; };
+  installOutcome = () => { svc.version = CURRENT; return { ok: true, data: { service: 'TuneService', version: CURRENT, pawnio: 'present' } }; };
   await clickIn('.setting', 'Update & start');
-  c = await until(card, (v) => v && !/needs version 8/.test(v.text) && !/didn't finish|cancelled/.test(v.text));
-  check('6 once version 8 answers, the reminder and the last failure are gone', !!c && !/needs version 8|didn't finish|cancelled|newer service version/.test(c.text), c?.text);
+  c = await until(card, (v) => v && !v.text.includes(`needs version ${CURRENT}`) && !/didn't finish|cancelled/.test(v.text));
+  check('6 once the current version answers, the reminder and the last failure are gone', !!c && !c.text.includes(`needs version ${CURRENT}`) && !/didn't finish|cancelled|newer service version/.test(c.text), c?.text);
   check('6 the notice is not shown for the current service', !(await notice()));
   const chip = await js(`document.querySelector('.admin-chip')?.textContent.trim()`);
   check('6 the sidebar says the service is on', /service/i.test(chip || '') && !/update/i.test(chip || ''), chip);
@@ -154,13 +155,13 @@ run.guard(async () => {
   win.webContents.reload();
   await ready();
   n = await until(notice, (v) => !!v);
-  check('7 a new pair of versions shows the notice again', !!n && /6/.test(n.text) && /8/.test(n.text), n?.text);
+  check('7 a new pair of versions shows the notice again', !!n && /6/.test(n.text) && n.text.includes(CURRENT), n?.text);
   check('7 Hebrew, right to left', n?.dir === 'rtl' && /עדכון שירות הרקע/.test(n.text) && /אחר כך/.test(n.text), n);
   await shot('7-he-notice.png');
   win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
   win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
   n = await until(notice, (v) => !v);
-  check('7 Escape closes it as "Later" (remembered for 6>8)', !n && savedLater() === '6>8', savedLater());
+  check('7 Escape closes it as "Later" (remembered for this version pair)', !n && savedLater() === `6>${CURRENT}`, savedLater());
   check('7 still nothing installed without a click', installs === 3, installs);
 
   check('no renderer errors', errors.length === 0, errors);
