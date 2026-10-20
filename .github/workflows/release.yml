@@ -8,8 +8,8 @@
 # A version with a pre-release part (1.4.0-beta.1) becomes a GitHub pre-release: installed copies of
 # a regular release keep updating from the latest regular release (electron-updater skips
 # pre-releases), so only people who download it get it.
-# Unsigned until there is a code-signing certificate (audit TUN-09, decision 9 in
-# docs/roadmap/decisions-he.md); then CSC_LINK and CSC_KEY_PASSWORD come from the repository's secrets.
+# Production publication requires the owner's real certificate and a full green CI run for the
+# exact commit. CI test installers are still available without a production certificate.
 name: Release
 
 on:
@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -28,7 +29,7 @@ jobs:
   release:
     if: ${{ startsWith(github.ref, 'refs/tags/v') || contains(github.event.head_commit.message, '[release v') }}
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 50
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
@@ -54,9 +55,32 @@ jobs:
           $global:LASTEXITCODE = 0  # "not found" is what was wanted; the step must not end with it
           "VERSION=$v" >> $env:GITHUB_ENV
           "TAG=$tag" >> $env:GITHUB_ENV
+      - name: full Windows CI passed for this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/release-gate.cjs
+      - run: npm audit --audit-level=moderate
       - run: npm test
-      - name: build (unsigned)
-        run: npm run dist -- --publish never
+      - name: prepare the production signing certificate
+        shell: pwsh
+        env:
+          CERTIFICATE: ${{ secrets.CSC_LINK }}
+          CERT_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          if (-not $env:CERTIFICATE -or -not $env:CERT_PASSWORD) { throw 'Production signing is not configured. Configure CSC_LINK (base64 PFX) and CSC_KEY_PASSWORD before publishing. Test builds remain available from CI.' }
+          $pfx = Join-Path $env:RUNNER_TEMP 'tune-production-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE))
+          $c = New-Object Security.Cryptography.X509Certificates.X509Certificate2($pfx, $env:CERT_PASSWORD)
+          if (-not $c.HasPrivateKey -or $c.NotAfter -le (Get-Date) -or $c.Subject -eq $c.Issuer) { throw 'A current production certificate with its private key is required; self-signed test certificates cannot publish.' }
+          $publisher = $c.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+          "CSC_LINK=$pfx" >> $env:GITHUB_ENV
+          "CSC_KEY_PASSWORD=$env:CERT_PASSWORD" >> $env:GITHUB_ENV
+          "TUNE_CI_SIGNER=$($c.Thumbprint)" >> $env:GITHUB_ENV
+          "SIGNING_PUBLISHER=$publisher" >> $env:GITHUB_ENV
+          'TUNE_SIGN_TIMESTAMP_URL=http://timestamp.digicert.com' >> $env:GITHUB_ENV
+      - name: build with the production certificate
+        shell: pwsh
+        run: npm run dist -- --publish never "-c.win.publisherName=$env:SIGNING_PUBLISHER"
       - name: packed contents; development licensing overrides ignored
         run: node scripts/ci/packaged-check.cjs
       - name: publish
@@ -71,3 +95,7 @@ jobs:
           $where = if ($env:GITHUB_REF -like 'refs/tags/*') { '--verify-tag' } else { "--target=$env:GITHUB_SHA" }
           gh release create $env:TAG --repo $env:GITHUB_REPOSITORY $where --title "$env:VERSION" --notes-file "docs/release-notes/v$env:VERSION.md" $kind @files
           if ($LASTEXITCODE) { throw "gh release create exited $LASTEXITCODE" }
+      - name: remove the temporary signing file
+        if: ${{ always() }}
+        shell: pwsh
+        run: Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'tune-production-signing.pfx') -Force -ErrorAction SilentlyContinue
