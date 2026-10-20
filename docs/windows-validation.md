@@ -11,7 +11,7 @@ every pull request.
 | Job | Check | What it proves |
 | --- | --- | --- |
 | test | `npm audit --audit-level=moderate`, `npm test` (Windows) | unit, architecture, IPC and licensing tests, plus the two Windows-only ones: every generated PowerShell script parses (including the elevated admin helper and the install/removal scripts), and cleanup never follows a junction |
-| e2e | `e2e:smoke`, `e2e:celebration` | every page, keyboard dialog flow, startup switches, one chime per completed scan; temporary profiles and service stand-ins |
+| e2e | `e2e:smoke`, `e2e:celebration` | every page, keyboard dialog flow, startup switches, one chime per completed scan; temporary profiles, explicit synthetic recommendation/startup rows and service stand-ins; machine changes refused |
 | e2e | `e2e:licensing` | activation, renewal deferrals, an outage, release and recovery, the clock set back and corrected, Hebrew RTL, in the real app with **real DPAPI and the runner's own machine id** (MachineGuid + SMBIOS UUID read through PowerShell); `license.bin` holds nothing readable |
 | e2e | `e2e:licensing-startup` | licensing at start (WIN-R01), five new-profile starts of the real app: three timed (how long the licence row and this PC's identity read take while the app's own start-up scans run, printed), one where the identity answers after 20 s (the row must not wait), one where it fails (reported as unavailable); one identity read per start |
 | e2e | `e2e:ipc-probes`, `e2e:layout`, `e2e:scan-failure` | the locked window→main connection; layout in English and Hebrew at 980×640 and 1347×852, Settings card included; failed scans never shown as fine |

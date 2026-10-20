@@ -12,8 +12,11 @@ export const GROUPS = [
 export function centerItems({ recs, bios, gpu, junk, startup, live, history = [], sources = {} }) {
   const recent = median(history.map((h) => h.cpuTempC).filter((x) => x != null));
   const items = (recs || []).map((r) => {
+    if (sources.recs === 'error') return { ...r, ok: null, unchecked: true, action: null };
     // BIOS: checked against the maker's site, so its status comes from the BIOS check.
-    if (r.key === 'bios') return { ...r, ok: bios?.supported ? !bios.newer : null };
+    if (r.key === 'bios') return sources.bios === 'error' || bios?.error
+      ? { ...r, ok: null, unchecked: true }
+      : { ...r, ok: bios?.supported ? !bios.newer : null };
     // The power-limit tip turns into a finding when the CPU has been very hot for the last half
     // minute (not on one momentary jump).
     // When the processor reports a long-term limit (PL1) below the unlimited ~253 W, the limit is
@@ -26,7 +29,9 @@ export function centerItems({ recs, bios, gpu, junk, startup, live, history = []
     return r;
   });
   const drivers = (gpu || []).filter((g) => g.vendor !== 'Intel' && g.latest);
-  if (drivers.length) {
+  const unknownGpu = sources.gpu === 'error' || (gpu || []).some(g => g.status === 'error' || g.error || g.installerKind === 'autodetect');
+  if (unknownGpu) items.push({ key: 'gpuDriver', group: 'gpu', ok: null, unchecked: true, go: 'updates' });
+  else if (drivers.length) {
     const g = drivers.find((x) => x.newer && x.url) || drivers[0];
     items.push({ key: 'gpuDriver', group: 'gpu', ok: !(g.newer && g.url), latest: g.latest, vendor: g.vendor, go: 'updates' });
   }

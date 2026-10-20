@@ -163,3 +163,25 @@ test('R5 follow-up: a failed hardware scan also stops the GPU driver and BIOS of
   o.remember('bios', { ok: true, data: { supported: true, newer: true, latest: { url: 'https://dlcdnets.asus.com/b.zip' } } });
   assert.equal(o.bios().ok, true);
 });
+
+test('the performance center cannot turn failed or autodetect-only GPU/BIOS checks into OK', async () => {
+  const { centerItems } = await load('src/features/diagnostics/findingSelectors.js', {});
+  const { recValue, recNote } = await load('src/features/diagnostics/recommendationText.js', {});
+  const bios = { supported: true, newer: false, maker: 'ASUS', latest: { version: '1836' } };
+  const gpu = [{ vendor: 'AMD', latest: '26.1.1', newer: false, installerKind: 'autodetect' }];
+  const rows = centerItems({ recs: [{ key: 'bios' }], bios, gpu, sources: { bios: 'error' } });
+  for (const key of ['bios', 'gpuDriver']) {
+    const row = rows.find(r => r.key === key);
+    assert.equal(row.ok, null, key); assert.equal(row.unchecked, true, key);
+    assert.equal(recValue(row, k => k), 'rec.unchecked');
+    assert.equal(recNote(row, k => k), 'rec.uncheckedNote');
+  }
+  const stale = centerItems({ recs: [], gpu: [{ vendor: 'NVIDIA', latest: '581.08', newer: false }], sources: { gpu: 'error' } });
+  assert.equal(stale.find(r => r.key === 'gpuDriver').ok, null);
+  assert.equal(centerItems({ recs: [], gpu: [{ vendor: 'NVIDIA', latest: '581.08', newer: false }], sources: { gpu: 'ok' } }).find(r => r.key === 'gpuDriver').ok, true);
+});
+test('a failed recommendation refresh preserves context without keeping an actionable OK verdict', async () => {
+  const { centerItems } = await load('src/features/diagnostics/findingSelectors.js', {});
+  const row = centerItems({ recs: [{ key: 'gamemode', ok: true, action: 'gamemode' }], sources: { recs: 'error' } })[0];
+  assert.equal(row.ok, null); assert.equal(row.unchecked, true); assert.equal(row.action, null);
+});

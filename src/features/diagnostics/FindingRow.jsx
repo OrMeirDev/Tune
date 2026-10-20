@@ -9,7 +9,7 @@ import { recIf, recNote, recTitle, recValue } from './recommendationText.js';
 export function CenterRow({ r, bios, onApply, onBiosDownload, onBiosGuide, onGuide, go, busy, prog }) {
   const t = useT();
   const isBios = r.key === 'bios';
-  const note = isBios && bios?.supported
+  const note = isBios && !r.unchecked && bios?.supported
     ? (bios.newer ? `${t('rc.biosNewer', { v: bios.latest.version, maker: bios.maker, date: bios.latest.date })} ${recNote(r, t)}`
       : bios.onBeta ? t('rc.biosOnBeta', { v: bios.installed, stable: bios.latest.version, maker: bios.maker })
         : t('rc.biosLatest', { maker: bios.maker })) + (bios.beta ? t('rc.biosBetaToo', { v: bios.beta.version }) : '')
@@ -26,12 +26,12 @@ export function CenterRow({ r, bios, onApply, onBiosDownload, onBiosGuide, onGui
       </div>
       <div className="acts">
         {r.ok === true && <span className="ok-text">{t('ok')}</span>}
-        {tip && <span className="note">{t('cc.tip')}</span>}
+        {tip && <span className="note">{t(r.unchecked ? 'rec.unchecked' : 'cc.tip')}</span>}
         {r.guide && <button className={r.ok === false ? 'btn-primary' : 'btn-ghost'} onClick={() => onGuide(r)}><BookOpen size={14} /> {t('cc.how')}</button>}
         {r.go && r.ok === false && <button className="btn-primary" onClick={() => go(r.go)}>{t(`cc.go.${r.go}`)}</button>}
         {r.go && r.ok !== false && <button className="btn-ghost" onClick={() => go(r.go)}>{t('cc.open')}</button>}
         {r.key === 'microcode' && r.ok === false && <button className="btn-primary" onClick={onBiosGuide}>{t('cc.toBios')}</button>}
-        {isBios && bios?.supported && bios.newer && (busy === 'bios' ? <ProgressPill p={prog.bios} fallback={t('prog.downloading')} /> : (<>
+        {isBios && !r.unchecked && bios?.supported && bios.newer && (busy === 'bios' ? <ProgressPill p={prog.bios} fallback={t('prog.downloading')} /> : (<>
           <button className="btn-ghost" onClick={onBiosGuide}><Info size={14} /> {t('up.howInstall')}</button>
           <button className="btn-primary" disabled={!!busy} onClick={onBiosDownload}><Download size={14} /> {t('rc.download')}</button>
         </>))}
