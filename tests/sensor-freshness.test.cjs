@@ -37,3 +37,11 @@ test('GPU fan readings are matched by device name, never enumeration order', () 
   assert.deepEqual(r.map(g => g.fanRpm), [1000, 2000]);
   assert.equal(mergeGpuReadings([{ name: 'unknown' }], [{ name: 'other', fanRpm: 1000 }])[0].fanRpm, null);
 });
+
+test('identical GPU names never borrow an ambiguous fan reading', () => {
+  const same = [{ name: 'same' }, { name: 'same' }];
+  assert.deepEqual(mergeGpuReadings(same, [{ name: 'same', fanRpm: 1000 }]).map(g => g.fanRpm), [null, null]);
+  assert.equal(mergeGpuReadings([{ name: 'same' }], [{ name: 'same', fanRpm: 1000 }, { name: 'same', fanRpm: 2000 }])[0].fanRpm, null);
+  assert.equal(mergeGpuReadings([{ name: 'one' }], [{ name: 'one', fanRpm: -1 }])[0].fanRpm, null);
+  assert.equal(mergeGpuReadings([{ name: 'one' }], [{ name: 'one', fanRpm: 0 }])[0].fanRpm, 0);
+});

@@ -12,11 +12,16 @@ function sensorSnapshot(data, now = Date.now()) {
     cpuVoltageSource: source, cpuClockMHz: fresh ? numberIn(d.cpuClockMHz, 0, 10000) : null,
     powerLimits: fresh ? d.powerLimits ?? null : null,
     cpuNote: fresh ? d.cpuNote ?? null : freshness,
-    gpus: fresh ? [].concat(d.gpus || []).filter(g => g && numberIn(g.tempC, 1, 149) != null) : [],
+    gpus: fresh ? [].concat(d.gpus || []).filter(g => g && numberIn(g.tempC, 1, 149) != null)
+      .map(g => ({ ...g, hotspotC: numberIn(g.hotspotC, 1, 149), fanRpm: numberIn(g.fanRpm, 0, 50000) })) : [],
   };
 }
 function mergeGpuReadings(service, windows = []) {
   const key = s => String(s || '').replace(/\s+/g, ' ').trim().toLowerCase();
-  return service.map(g => ({ ...g, fanRpm: windows.find(w => key(w.name) === key(g.name))?.fanRpm ?? null }));
+  return service.map(g => {
+    const matches = windows.filter(w => key(w.name) === key(g.name));
+    const unique = key(g.name) && matches.length === 1 && service.filter(s => key(s.name) === key(g.name)).length === 1;
+    return { ...g, fanRpm: unique ? numberIn(matches[0].fanRpm, 0, 50000) : null };
+  });
 }
 module.exports = { sensorSnapshot, mergeGpuReadings, MAX_AGE_MS };
