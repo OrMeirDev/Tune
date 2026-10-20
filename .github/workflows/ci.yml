@@ -38,6 +38,15 @@ jobs:
       - run: npm ci --no-fund --no-audit
       - run: npm audit --audit-level=moderate
       - run: npm test
+      - name: licensing concurrency stability (five fresh process groups; every run must pass)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          1..5 | ForEach-Object {
+            Write-Output "Concurrency run $_ of 5"
+            node --test licensing/tests/race.test.cjs
+            if ($LASTEXITCODE) { throw "licensing concurrency run $_ failed" }
+          }
       - run: npm run build
       - name: main-process syntax
         shell: pwsh
