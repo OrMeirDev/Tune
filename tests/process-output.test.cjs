@@ -24,3 +24,12 @@ test('a real child failure reports its exit and diagnostic instead of losing the
   const result = nextLine(c); c.stderr.emit('data', 'database failed'); c.emit('close', 1, null);
   await assert.rejects(result, /code.*1.*database failed/);
 });
+
+test('nextLine used as a map callback never interprets the child index as a deadline', async () => {
+  const list = [child(), child()];
+  for (const c of list) { const r = observeChild(c, line => line === 'ready'); c.stdout.emit('data', 'ready\n'); await r; }
+  const replies = Promise.all(list.map(nextLine));
+  await new Promise(resolve => setTimeout(resolve, 20));
+  for (const c of list) { c.stdout.emit('data', 'answer\n'); c.emit('close', 0, null); }
+  assert.deepEqual(await replies, ['answer', 'answer']);
+});

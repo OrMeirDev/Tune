@@ -28,7 +28,8 @@ function startChild(file, env, isReady) {
   const child = spawn(process.execPath, [file], { env: { ...process.env, NODE_NO_WARNINGS: '1', ...env }, stdio: ['pipe', 'pipe', 'pipe'] });
   return observeChild(child, isReady);
 }
-function nextLine(child, timeoutMs = 60000) {
+function nextLine(child) {
+  const timeoutMs = 60000; // safe as Array.map callback: its index is not a timeout
   return new Promise((resolve, reject) => {
     const finish = (err, line) => { clearTimeout(timer); child.removeListener('tune-output', read); err ? reject(err) : resolve(line); };
     const read = () => {
