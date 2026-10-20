@@ -67,3 +67,26 @@ test('AMD autodetect does not claim a card-specific update or an all-good scan',
     assert.equal(scanVerdict({ sources }).state, 'incomplete');
   } finally { global.fetch = original; }
 });
+
+test('AMD autodetect remains actionable through the real IPC offer gate, never from stale data', async () => {
+  const { createOffers, STALE } = require('../electron/ipc/offers.cjs');
+  const { createChannels } = require('../electron/ipc/channels.cjs');
+  const offers = createOffers(), calls = [], opened = [];
+  const gpu = { gpu: 'AMD Radeon RX 7900 XTX', vendor: 'AMD', status: 'ok', newer: false, installerKind: 'autodetect', url: 'https://drivers.amd.com/drivers/installer/test-minimalsetup.exe' };
+  offers.remember('gpu', { ok: true, data: [gpu] });
+  const channels = createChannels({
+    offers, entitlements: { featureOf: () => null },
+    sys: { downloadGpuInstaller: async (url, dir) => { calls.push({ url, dir }); return { ok: true, data: 'C:\\test\\amd.exe' }; } },
+    settings: { get: () => ({ saveDir: 'C:\\test' }) }, progressTo: () => () => {},
+    shell: { openPath: file => opened.push(file) }, history: { add() {} },
+  });
+  assert.equal((await channels['drv:gpuInstaller'].run(gpu.gpu)).ok, true);
+  assert.deepEqual(calls, [{ url: gpu.url, dir: 'C:\\test' }]);
+  assert.deepEqual(opened, ['C:\\test\\amd.exe']);
+  offers.remember('gpu', { ok: false, error: 'refresh failed' });
+  assert.equal((await channels['drv:gpuInstaller'].run(gpu.gpu)).error, STALE);
+  assert.equal(calls.length, 1);
+  offers.remember('gpu', { ok: true, data: [{ ...gpu, status: 'error' }] });
+  assert.equal((await channels['drv:gpuInstaller'].run(gpu.gpu)).ok, false);
+  assert.equal(calls.length, 1);
+});

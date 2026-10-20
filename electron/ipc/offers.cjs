@@ -47,10 +47,10 @@ function createOffers() {
       const items = ids.map((id) => offered.get(String(id).toLowerCase()));
       return items.every(Boolean) ? { ok: true, data: items } : no('update not offered');
     },
-    // a newer graphics driver found for this GPU (by its name, as the check reported it)
+    // A newer driver, or AMD's explicit autodetect tool, found by main for this GPU.
     gpuDriver(gpu) {
       if (!fresh('gpu')) return no(STALE);
-      const g = [].concat(last.gpu || []).find((x) => x.gpu === gpu && x.newer && x.url);
+      const g = [].concat(last.gpu || []).find((x) => x.gpu === gpu && x.url && (x.newer || (x.vendor === 'AMD' && x.installerKind === 'autodetect' && x.status === 'ok')));
       return g ? { ok: true, data: g } : no('no driver offered for this GPU');
     },
     // the newer BIOS the maker's catalog offered
