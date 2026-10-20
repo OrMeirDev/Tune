@@ -28,6 +28,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { createRun } = require('./harness.cjs');
+const { createCapture } = require('./capture.cjs');
 
 const APP_DIR = path.join(__dirname, '..');
 const PRIV = path.join(APP_DIR, 'electron', 'privilege');
@@ -77,7 +78,7 @@ run.guard(async () => {
   win.setContentSize(1347, 852); win.show(); win.focus(); win.webContents.focus();
   await ready();
   win.webContents.setZoomFactor(1);
-  const shot = async (n) => { win.webContents.invalidate(); await wait(250); fs.writeFileSync(path.join(OUT_DIR, n), (await win.webContents.capturePage()).toPNG()); };
+  const shot = createCapture({ win, outDir: OUT_DIR, run });
   const until = async (fn, ok, ms = 15000) => { const end = Date.now() + ms; let v; while (Date.now() < end) { v = await fn(); if (ok(v)) return v; await wait(150); } return v; };
   const notice = () => js(`(() => { const m = document.querySelector('.service-notice'); return m ? { text: m.innerText, focus: document.activeElement?.textContent?.trim() || null, dir: getComputedStyle(m).direction } : null; })()`);
   const card = () => js(`(() => { const b = [...document.querySelectorAll('.setting')].find((s) => /Background service|שירות רקע/.test(s.querySelector('.setting-title')?.textContent || '')); return b ? { text: b.innerText, buttons: [...b.querySelectorAll('button')].map((x) => ({ t: x.textContent.trim(), disabled: x.disabled })) } : null; })()`);

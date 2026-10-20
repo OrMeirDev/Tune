@@ -16,7 +16,7 @@ const leftovers = () => fs.readdirSync(dir);
 const sha = (b) => crypto.createHash('sha256').update(b).digest('hex');
 
 // a fake fetch answer: body chunks, optional content-length, final URL; `hang` never sends data
-function fakeFetch({ chunks = [], length, url = 'https://dl.example.com/f.bin', status = 200, hang = false }) {
+function fakeFetch({ chunks = [], length, url = 'https://drivers.amd.com/f.bin', status = 200, hang = false }) {
   return async (_u, opts) => ({
     ok: status < 400, status, url,
     headers: new Map(length != null ? [['content-length', String(length)]] : []),
@@ -35,7 +35,7 @@ const file = (n) => path.join(dir, n);
 
 test('a good download lands under its real name, verified, with nothing else left', async () => {
   const data = 'hello driver';
-  const r = await withFetch(fakeFetch({ chunks: ['hello ', 'driver'], length: data.length }), () => downloadFile('https://dl.example.com/f.bin', file('ok.bin'), { sha256: sha(data) }));
+  const r = await withFetch(fakeFetch({ chunks: ['hello ', 'driver'], length: data.length }), () => downloadFile('https://drivers.amd.com/f.bin', file('ok.bin'), { sha256: sha(data) }));
   assert.deepEqual(r, { ok: true, data: file('ok.bin') });
   assert.equal(fs.readFileSync(file('ok.bin'), 'utf8'), data);
   assert.deepEqual(leftovers(), ['ok.bin']);
@@ -54,7 +54,7 @@ test('failures return an error and leave no file', async () => {
     ['HTTP error', fakeFetch({ status: 404 }), {}, /HTTP 404/],
   ];
   for (const [name, f, opts, err] of cases) {
-    const r = await withFetch(f, () => downloadFile('https://dl.example.com/f.bin', file('x.bin'), opts));
+    const r = await withFetch(f, () => downloadFile('https://drivers.amd.com/f.bin', file('x.bin'), opts));
     assert.equal(r.ok, false, name);
     assert.match(r.error, err, name);
     assert.deepEqual(leftovers(), [], `${name}: nothing left behind`);
@@ -62,7 +62,7 @@ test('failures return an error and leave no file', async () => {
 });
 
 test('a folder that cannot be written to is an error, not a crash', async () => {
-  const r = await withFetch(fakeFetch({ chunks: ['abc'], length: 3 }), () => downloadFile('https://dl.example.com/f.bin', path.join(dir, 'missing', 'f.bin')));
+  const r = await withFetch(fakeFetch({ chunks: ['abc'], length: 3 }), () => downloadFile('https://drivers.amd.com/f.bin', path.join(dir, 'missing', 'f.bin')));
   assert.equal(r.ok, false);
   assert.match(r.error, /could not save|ENOENT/);
 });

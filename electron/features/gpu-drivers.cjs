@@ -5,13 +5,15 @@ const path = require('path');
 const { cmpVer } = require('../domain/versions.cjs');
 const { downloadFile } = require('../infra/download.cjs');
 const { runPS } = require('../infra/powershell.cjs');
+const { vendorFetch, boundedBody } = require('../infra/vendor-fetch.cjs');
 
 // A maker's page or API: an HTTP error, a time-out or an empty answer is a failure, never "no update".
 const MAKER_TIMEOUT_MS = 20000;
 async function makerFetch(url, headers = {}) {
-  const r = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', ...headers }, signal: AbortSignal.timeout(MAKER_TIMEOUT_MS) });
+  const r = await vendorFetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', ...headers }, signal: AbortSignal.timeout(MAKER_TIMEOUT_MS) });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return r;
+  const bytes = await boundedBody(r, 8 * 1024 * 1024);
+  return { text: async () => bytes.toString('utf8'), json: async () => JSON.parse(bytes.toString('utf8')) };
 }
 
 // Graphics drivers: Windows Update lags behind the GPU makers, so check their official sites too.

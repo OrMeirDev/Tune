@@ -3,7 +3,7 @@
 // What a measurement is and when two may be compared lives in domain/measurement-policy.cjs.
 const fs = require('fs');
 const os = require('os');
-const { bootFacts, bootRecords, latestByMetric, summarizeRest } = require('../domain/measurement-policy.cjs');
+const { bootFacts, bootRecords, bootTimingStatus, latestByMetric, summarizeRest } = require('../domain/measurement-policy.cjs');
 const { runPS } = require('../infra/powershell.cjs');
 const { serviceCall } = require('../privilege/service.cjs');
 
@@ -62,15 +62,29 @@ const BOOT_PS = `
 $types = @()
 try { $types = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-Kernel-Boot'; Id = 27 } -MaxEvents 30 -ErrorAction Stop | ForEach-Object { @{ at = $_.TimeCreated.ToUniversalTime().ToString('o'); code = [int]$_.Properties[0].Value } }) } catch {}
 $num = { param($v) if ([string]$v -match '^\\d+$') { [int64]$v } else { $null } }
-$timings = @(); $timingStatus = 'ok'
+$timings = @(); $timingQuery = 'ok'; $timingLog = $null
+$logName = 'Microsoft-Windows-Diagnostics-Performance/Operational'
+$queryFailure = {
+  param($e)
+  if ($e.Exception -is [UnauthorizedAccessException] -or $e.Exception.InnerException -is [UnauthorizedAccessException]) { 'denied' }
+  elseif ($e.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') { 'noMatch' }
+  else { 'unavailable' }
+}
 try {
   $timings = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Diagnostics-Performance/Operational'; Id = 100 } -MaxEvents 10 -ErrorAction Stop | ForEach-Object {
     $d = @{}; foreach ($n in ([xml]$_.ToXml()).Event.EventData.Data) { $d[[string]$n.Name] = [string]$n.'#text' }
     @{ at = $_.TimeCreated.ToUniversalTime().ToString('o'); startedAt = $d['BootStartTime']; bootMs = (& $num $d['BootTime']); mainPathMs = (& $num $d['MainPathBootTime']); postBootMs = (& $num $d['BootPostBootTime']); startupApps = (& $num $d['BootNumStartupApps']) } })
 } catch {
-  $timingStatus = if ($_.FullyQualifiedErrorId -like 'NoMatchingEventsFound*') { 'none' }
-    elseif ($_.Exception -is [UnauthorizedAccessException] -or $_.Exception.InnerException -is [UnauthorizedAccessException]) { 'needsAdmin' }
-    else { 'unavailable' }
+  $timingQuery = & $queryFailure $_
+  if ($timingQuery -eq 'noMatch') {
+    try {
+      $probe = @(Get-WinEvent -LogName $logName -MaxEvents 1 -ErrorAction Stop)
+      $timingLog = if ($probe.Count) { 'readable' } else { 'empty' }
+    } catch {
+      $probeFailure = & $queryFailure $_
+      $timingLog = if ($probeFailure -eq 'noMatch') { 'empty' } else { $probeFailure }
+    }
+  }
 }
 $hiberboot = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Power' -ErrorAction SilentlyContinue).HiberbootEnabled
 $hibernate = (Get-ItemProperty 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Power' -ErrorAction SilentlyContinue).HibernateEnabled
@@ -80,7 +94,7 @@ try {
   $pd = Get-PhysicalDisk -ErrorAction Stop | Where-Object { [string]$_.DeviceId -eq [string]$part.DiskNumber } | Select-Object -First 1
   if ($pd) { $media = [string]$pd.MediaType; $bus = [string]$pd.BusType }
 } catch {}
-$result = @{ types = $types; timings = $timings; timingStatus = $timingStatus; hiberboot = $hiberboot; hibernate = $hibernate; media = $media; bus = $bus }`;
+$result = @{ types = $types; timings = $timings; timingQuery = $timingQuery; timingLog = $timingLog; hiberboot = $hiberboot; hibernate = $hibernate; media = $media; bus = $bus }`;
 
 // The facts, every start read (stored by the caller), and `current`: the newest start this read
 // returned, which is the only one the diagnosis judges (an older stored one is history).
@@ -89,7 +103,7 @@ async function bootInfo() {
   if (!r.ok) return r;
   const raw = r.data || {};
   const records = bootRecords({ timings: [].concat(raw.timings || []), types: [].concat(raw.types || []) });
-  return { ok: true, data: { ...bootFacts(raw), records, current: latestByMetric(records) } };
+  return { ok: true, data: { ...bootFacts({ ...raw, timingStatus: bootTimingStatus(raw) }), records, current: latestByMetric(records) } };
 }
 
 module.exports = { diskFree, restMeasure, bootInfo, BOOT_PS };

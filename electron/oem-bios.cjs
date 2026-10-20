@@ -6,6 +6,7 @@ const { promisify } = require('util');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { vendorFetch, boundedBody } = require('./infra/vendor-fetch.cjs');
 
 const UA = { 'User-Agent': 'Mozilla/5.0' };
 // Catalog requests are bounded: a time limit, and a size ceiling for the downloaded catalogs.
@@ -23,20 +24,20 @@ const cmpVer = (a, b) => {
 };
 
 async function getText(url) {
-  const r = await fetch(url, { headers: UA, signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS) });
+  const r = await vendorFetch(url, { headers: UA, signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS) });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  return (await r.text()).replace(/^\ufeff/, '');
+  return (await boundedBody(r, 16 * 1024 * 1024)).toString('utf8').replace(/^\ufeff/, '');
 }
 
 // Dell and HP publish their catalogs as .cab archives; Windows' own expand.exe opens them (without
 // blocking the main process, and with a time limit).
 async function getCab(url) {
-  const r = await fetch(url, { headers: UA, signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS * 4) });
+  const r = await vendorFetch(url, { headers: UA, signal: AbortSignal.timeout(CATALOG_TIMEOUT_MS * 4) });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   if (Number(r.headers.get('content-length')) > CATALOG_MAX_BYTES) throw new Error('catalog is too large');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tune-cab-'));
   try {
-    fs.writeFileSync(path.join(dir, 'in.cab'), Buffer.from(await r.arrayBuffer()));
+    fs.writeFileSync(path.join(dir, 'in.cab'), await boundedBody(r, CATALOG_MAX_BYTES));
     fs.mkdirSync(path.join(dir, 'out'));
     await promisify(execFile)(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'expand.exe'), [path.join(dir, 'in.cab'), '-F:*', path.join(dir, 'out')], { windowsHide: true, timeout: 60000 });
     const [file] = fs.readdirSync(path.join(dir, 'out'));

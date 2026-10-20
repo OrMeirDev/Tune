@@ -58,7 +58,7 @@ a time, progress, the result banner), `app/useCommands.js` (what each button run
 | `privilege/service.cjs`, `privilege/admin-session.cjs` | the LocalSystem service (install, update side by side with rollback, removal) and the UAC admin session that run those operations | `infra/`, `privilege/` |
 | `privilege/elevated.cjs`, `privilege/pipe.cjs` | starting elevated PowerShell from the command line alone; the one-request-per-connection pipe protocol the service and the elevated helpers speak | `infra/`, `privilege/` |
 | `privilege/service-version.cjs` | the service's version, compiled into `service/TuneService.cs` by `scripts/build-service.cjs` (which also writes the file manifest, and signs the service when a certificate is configured) | – |
-| `infra/` | running PowerShell, downloading files | Node only |
+| `infra/` | running PowerShell, downloading files, vendor redirects and bounded catalog reads | Node, pure `domain/` policies only |
 | `domain/` | pure rules: recommendation policy, vendor guidance with sources (`advice-rules.cjs`), version compare, measurements and their comparison (`measurement-policy.cjs`) | `domain/` only |
 | `licensing/` | the licensing client that ships: config, API requests, DPAPI storage, identity and device key, certificate checks and licence state, entitlements, the flows (`client.cjs`); `index.cjs` puts them together for `main.cjs` | `licensing/`, `infra/` (never `features/`, `privilege/`, `ipc/`) |
 

@@ -4,7 +4,8 @@ const path = require('path');
 const { cmpVer } = require('../domain/versions.cjs');
 const { downloadFile } = require('../infra/download.cjs');
 const { runPS } = require('../infra/powershell.cjs');
-const { BIOS_SOURCES, oemBios, searchPage } = require('../oem-bios.cjs');
+const { vendorFetch, boundedBody } = require('../infra/vendor-fetch.cjs');
+const { BIOS_SOURCES, oemBios, searchPage, sha256Or } = require('../oem-bios.cjs');
 
 // ASUS's support site lists every BIOS for a board through the same JSON its own pages load,
 // with a SHA-256 for each file. Other makers: a search for their official page.
@@ -67,9 +68,9 @@ async function asusBiosFiles(model) {
   const failures = [];
   for (const url of urls) {
     try {
-      const r = await fetch(url, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36', Accept: 'application/json' } });
+      const r = await vendorFetch(url, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36', Accept: 'application/json' } });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = await r.json();
+      const j = JSON.parse((await boundedBody(r, 8 * 1024 * 1024)).toString('utf8'));
       if (!j || String(j.Status).toUpperCase() === 'FAIL' || j.Result == null) throw new Error(`ASUS answered ${j?.Status || 'nothing'}`);
       // the answer counts only if it has the expected shape: a list of groups, and the BIOS group's
       // files (if there is one) a list too; anything else is a broken answer, not "no BIOS files"
@@ -91,7 +92,7 @@ async function asusBiosFiles(model) {
 async function downloadBios(latest, dir, onProgress) {
   const u = new URL(latest.url);
   const src = BIOS_SOURCES.find((s) => s.host.test(u.hostname));
-  if (u.protocol !== 'https:' || !src || !latest.sha256) return { ok: false, error: 'not an official BIOS download' };
+  if (u.protocol !== 'https:' || !src || !sha256Or(latest.sha256)) return { ok: false, error: 'not an official BIOS download' };
   const r = await downloadFile(u.href, path.join(dir, path.basename(u.pathname)), { sha256: latest.sha256, onProgress });
   if (!r.ok || !src.signer) return r;
   const sig = await runPS(`$s = Get-AuthenticodeSignature -LiteralPath '${r.data.replace(/'/g, "''")}'; $result = @{ status = [string]$s.Status; signer = [string]$s.SignerCertificate.Subject }`);

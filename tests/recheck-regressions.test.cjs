@@ -11,7 +11,7 @@ const esbuild = require('esbuild');
 const ROOT = path.join(__dirname, '..');
 const verdict = () => import('../src/domain/scan-verdict.mjs');
 const withFetch = async (f, run) => { const real = global.fetch; global.fetch = f; try { return await run(); } finally { global.fetch = real; } };
-const reply = (body, { status = 200, json = false } = {}) => ({ ok: status < 400, status, text: async () => (json ? JSON.stringify(body) : body), json: async () => body, headers: new Map() });
+const reply = (body, { status = 200, json = false } = {}) => new Response(json ? JSON.stringify(body) : body, { status });
 const OK = { ok: true, data: [] };
 const HW = { ok: true, data: {} };
 
