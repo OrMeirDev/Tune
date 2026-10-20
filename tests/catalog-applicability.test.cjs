@@ -90,3 +90,15 @@ test('AMD autodetect remains actionable through the real IPC offer gate, never f
   assert.equal((await channels['drv:gpuInstaller'].run(gpu.gpu)).ok, false);
   assert.equal(calls.length, 1);
 });
+
+test('a failed hardware read cannot be bypassed by rerunning a catalog against old hardware', () => {
+  const { createOffers, STALE } = require('../electron/ipc/offers.cjs');
+  const o = createOffers();
+  o.remember('hw', { ok: true, data: { boardModel: 'SAMPLE BOARD', gpus: [{ name: 'SAMPLE GPU' }] } });
+  o.remember('hw', { ok: false, error: 'hardware unavailable' });
+  assert.equal(o.board().error, STALE); assert.equal(o.gpus().error, STALE);
+  // Also cover a catalog already in flight when the hardware read failed.
+  o.remember('gpu', { ok: true, data: [{ gpu: 'SAMPLE GPU', newer: true, url: 'https://drivers.amd.com/sample.exe' }] });
+  o.remember('bios', { ok: true, data: { supported: true, newer: true, latest: { url: 'https://dlcdnets.asus.com/sample.zip' } } });
+  assert.equal(o.gpuDriver('SAMPLE GPU').error, STALE); assert.equal(o.bios().error, STALE);
+});
