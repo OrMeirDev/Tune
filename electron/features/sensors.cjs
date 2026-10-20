@@ -64,7 +64,7 @@ $result = @{ cpuLoad = [math]::Round($load); ramTotalGB = [math]::Round($os.Tota
 const liveCpu = (s) => {
   const { gpus, ...d } = sensorSnapshot(s?.ok ? s.data : null);
   return {
-    ...d,
+    ...d, gpuTemps: gpus,
     cpuNote: !s ? 'no service' : s.ok ? d.cpuNote : s.error,
   };
 };
@@ -92,10 +92,12 @@ async function sensors() {
 // Hardware sensors come from the background service (LibreHardwareMonitor); load, memory and the
 // GPU temperature Windows itself reports work without it.
 async function performance() {
+  const refreshedAt = new Date().toISOString();
   const [r, s] = await Promise.all([perfPS(), serviceCall({ op: 'sensors' }, { timeoutMs: 8000 })]);
   if (!r.ok) return r;
   const d = sensorSnapshot(s?.ok ? s.data : null);
-  Object.assign(r.data, liveCpu(s));
+  const windowsGpus = r.data.gpuTemps;
+  Object.assign(r.data, liveCpu(s), { refreshedAt, gpuTemps: windowsGpus });
   // The service also knows the GPU hot spot; keep Windows' reading when the service isn't there.
   if ([].concat(d.gpus || []).length) r.data.gpuTemps = mergeGpuReadings([].concat(d.gpus), r.data.gpuTemps);
   return r;

@@ -75,7 +75,9 @@ function createChannels(d) {
       args: [arrayOf(match(GUID, 36), 100), PROGRESS_KEY],
       run: (ids, key) => withOffer(offers.drivers(ids), async (items) => {
         const r = await sys.installDrivers(items.map((i) => i.id), d.progressTo(key));
-        if (r.ok) record('drivers', { items: items.map((i) => i.title), reboot: r.data.reboot, restore: r.data.restore }, r);
+        if (r.ok) record('drivers', { items: items.map((i) => i.title), reboot: r.data.reboot, restore: r.data.restore,
+          ...(Array.isArray(r.data.results) ? { results: items.map(i => ({ id: i.id, title: i.title, code: r.data.results.find(x => x.id === i.id)?.code ?? null })) } : {}),
+        }, r);
         return r;
       }),
     },

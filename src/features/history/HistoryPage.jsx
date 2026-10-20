@@ -1,6 +1,7 @@
 // What Tune did, with what each change measurably did (plan PF02.3), and restore points.
 import { useEffect, useState } from 'react';
 import { RotateCcw, ShieldCheck, Undo2 } from 'lucide-react';
+import { driverOutcome } from '../../domain/driver-outcome.mjs';
 import { api } from '../../api.js';
 import { useT } from '../../i18n.js';
 import { fmtDate } from '../../presentation/format.jsx';
@@ -48,6 +49,7 @@ export function HistoryPage({ busy, onRestorePoint, measured }) {
               <div className="dname" style={{ whiteSpace: 'normal' }}>{describeChange(h, t)}</div>
               <div className="dmeta">{fmtDate(h.at, t)}</div>
               {h.detail.operationState && <div className="dmeta">{t(['running', 'unknown', 'interrupted'].includes(h.detail.operationState) ? 'h.unknownHint' : 'h.recordedHint')}</div>}
+              {[].concat(h.detail.results || h.detail.result?.data?.results || []).map((r, j) => <div key={r.id || j} className="dmeta">{r.title || r.id}: {t(`h.driver.${driverOutcome(r.code)}`)}</div>)}
               {h.detail.result?.error && <div className="dmeta">{h.detail.result.error}</div>}
               {h.detail.result?.data?.reboot && <div className="dmeta">{t('h.reboot')}</div>}
               <ChangeEffect change={effects.get(h.id || `${h.action}|${h.at}`)} />

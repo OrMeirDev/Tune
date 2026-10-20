@@ -1,6 +1,7 @@
 // What each button that changes something does: the operation to run (through useOperations'
 // `act`), the message for its result, and what to reload afterwards. Actions send only an ID; the
 // main process acts on what it found itself (electron/ipc/offers.cjs).
+import { summarizeDrivers } from '../domain/driver-outcome.mjs';
 import { api } from '../api.js';
 import { recTitle } from '../features/diagnostics/recommendationText.js';
 import { errText, fmtGB } from '../presentation/format.jsx';
@@ -20,10 +21,11 @@ export function useCommands({ t, act, results, loadService, setServiceAttempt, s
   const installDrivers = (items) => {
     const key = items.length === 1 ? items[0].id : 'all';
     return act(key, () => api.installDrivers(items.map((i) => i.id), key), (d) => {
-      const okCount = (d.results || []).filter((x) => x.code === 2 || x.code === 3).length;
+      const counts = summarizeDrivers(d.results, items.length);
+      const details = ['partial', 'failed', 'aborted', 'unknown'].filter(k => counts[k]).map(k => t(`msg.driver.${k}`, { n: counts[k] })).join(' ');
       scanDrivers();
       const rp = d.restore === 'created' ? t('msg.rpCreated') : d.restore === 'recent' ? t('msg.rpRecent') : d.restore === 'unavailable' ? t('msg.rpUnavailable') : t('msg.rpNot', { e: d.restore });
-      return t('msg.installed', { ok: okCount, n: items.length }) + rp + (d.reboot ? t('msg.rebootNeeded') : '');
+      return t('msg.installed', { ok: counts.installed, n: items.length }) + (details ? ` ${details}` : '') + rp + (d.reboot ? t('msg.rebootNeeded') : '');
     }, { admin: true });
   };
   const gpuInstall = (g) => act(g.gpu, () => api.gpuInstaller(g.gpu), () => t('msg.gpuDone', { vendor: g.vendor }));

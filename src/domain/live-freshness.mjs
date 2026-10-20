@@ -5,6 +5,6 @@ export function freshLive(live, now = Date.now()) {
   const receiptStale = !Number.isFinite(age) || age > 10000 || age < -1000;
   if (!receiptStale && !hardwareStale) return live;
   return { ...live, cpuTempC: null, cpuPowerW: null, cpuVoltageV: null, cpuClockMHz: null,
-    powerLimits: null, cpuNote: 'stale', freshness: 'stale',
+    gpuTemps: [], powerLimits: null, cpuNote: 'stale', freshness: 'stale',
     ...(receiptStale ? { cpuLoad: null, ramUsedBytes: null, ramTotalBytes: null } : {}) };
 }
