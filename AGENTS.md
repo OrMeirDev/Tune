@@ -118,6 +118,8 @@ The plan and the status of every task: `docs/roadmap/`.
   nothing (`clean` with no categories) to check who may ask, and run a console copy of the service
   with a test `ops.ps1`. Fault injection exists only in a test build of the service
   (`build-service.cjs --test-faults <folder>`, `/define:TUNE_FAULTS`), never in what ships.
+- `npm run release` prints the guarded workflow instructions and publishes nothing; it cannot bypass CI
+  or production signing. `npm run dist -- --publish never` builds a local test candidate.
 - Publishing a release needs the owner's explicit go-ahead. With it: set the version in
   `package.json`, write `docs/release-notes/v<version>.md` (English and Hebrew), let CI pass on that
   commit, then push the tag `v<version>` (or, where tags can't be pushed, a commit whose message
