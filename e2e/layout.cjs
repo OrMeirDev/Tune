@@ -52,16 +52,22 @@ sys.serviceStatus = async () => ({ ok: true, data: { installed: true, running: t
 const CHECK = `(() => {
   const scope = document.querySelector('.modal') || document.body;
   const runs = [];
+  // Chromium can report ranges for the unpainted contents of closed native disclosures.
+  // Their summaries stay in this check; ui-polish.cjs also checks the expanded state.
+  const hiddenByDisclosure = (el) => {
+    const closed = el.closest('details:not([open])');
+    return closed && !closed.querySelector(':scope > summary')?.contains(el);
+  };
   const clip = (el, b) => { for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) { const s = getComputedStyle(a); if (/(hidden|clip|auto|scroll)/.test(s.overflowX + s.overflowY)) { const c = a.getBoundingClientRect(); b = { l: Math.max(b.l, c.left), t: Math.max(b.t, c.top), r: Math.min(b.r, c.right), b: Math.min(b.b, c.bottom) }; } } return b; };
   const w = document.createTreeWalker(scope, NodeFilter.SHOW_TEXT);
   for (let n; (n = w.nextNode());) {
     if (!n.textContent.trim()) continue;
     const el = n.parentElement; const st = getComputedStyle(el);
-    if (st.visibility === 'hidden' || st.display === 'none') continue;
+    if (st.visibility === 'hidden' || st.display === 'none' || hiddenByDisclosure(el)) continue;
     const r = document.createRange(); r.selectNodeContents(n);
     for (const rect of r.getClientRects()) { if (rect.width < 2) continue; const box = clip(el, { l: rect.left, t: rect.top, r: rect.right, b: rect.bottom }); if (box.r - box.l > 2 && box.b - box.t > 2) runs.push({ el, box, text: n.textContent.trim().slice(0, 28) }); }
   }
-  for (const el of scope.querySelectorAll('button, .pill, .stat, input, select, .score')) { const c = el.getBoundingClientRect(); if (c.width < 3) continue; const box = clip(el, { l: c.left + 1, t: c.top + 1, r: c.right - 1, b: c.bottom - 1 }); if (box.r - box.l > 2 && box.b - box.t > 2) runs.push({ el, box, text: '[' + (el.className || el.tagName).toString().split(' ')[0] + ']' }); }
+  for (const el of scope.querySelectorAll('button, .pill, .stat, input, select, .score')) { const c = el.getBoundingClientRect(); if (c.width < 3 || hiddenByDisclosure(el)) continue; const box = clip(el, { l: c.left + 1, t: c.top + 1, r: c.right - 1, b: c.bottom - 1 }); if (box.r - box.l > 2 && box.b - box.t > 2) runs.push({ el, box, text: '[' + (el.className || el.tagName).toString().split(' ')[0] + ']' }); }
   const o = [];
   for (let i = 0; i < runs.length; i++) for (let j = i + 1; j < runs.length; j++) { const a = runs[i], b = runs[j]; if (a.el === b.el || a.el.contains(b.el) || b.el.contains(a.el)) continue; const x = Math.min(a.box.r, b.box.r) - Math.max(a.box.l, b.box.l), y = Math.min(a.box.b, b.box.b) - Math.max(a.box.t, b.box.t); if (x > 3 && y > 3) o.push(a.text + ' <> ' + b.text); }
   return { overlaps: [...new Set(o)].slice(0, 10), pageScroll: document.querySelector('.main').scrollHeight > document.querySelector('.main').clientHeight + 2, wide: document.documentElement.scrollWidth > innerWidth + 1, sideScroll: document.querySelector('.sidebar').scrollHeight > document.querySelector('.sidebar').clientHeight + 2 };

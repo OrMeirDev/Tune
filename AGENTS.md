@@ -21,6 +21,11 @@ Hebrew (RTL).
   (`privilege/service-version.cjs`); an older, unverifiable or missing service means Windows' prompt
   (the admin session), and a request that may have run is never sent a second time
   (`privilege/service.cjs`). Raise the version with every change to the service.
+- Service changes carry a main-owned UUID. The protected `service/OperationJournal.cs` records caller SID,
+  request digest and start before execution, and the result before answering. `operationStatus` is
+  read-only and returns only this caller's own UUID. A lost answer is queried, never replayed or
+  silently moved to another helper. The local `operations.json` keeps IDs/results, never executable
+  requests. Unknown or interrupted operations remain unknown; a missing result is never success.
 - The window is untrusted: every request is checked in `electron/ipc/` (sender, argument shape), and
   actions carry only an ID of something the main process found itself; never a URL, hash, path or
   descriptor from the window. A new IPC channel goes in `ipc/channels.cjs` with its argument rules.
@@ -50,7 +55,7 @@ a time, progress, the result banner), `app/useCommands.js` (what each button run
 
 | Folder / file | Owns | May require |
 | --- | --- | --- |
-| `main.cjs`, `preload.cjs` | windows, IPC, the bridge | `system.cjs`, `report.cjs`, `oem-bios.cjs`, `measure-store.cjs`, `licensing/index.cjs` |
+| `main.cjs`, `preload.cjs` | windows, IPC, the bridge, main-owned operation IDs | `system.cjs`, `report.cjs`, `oem-bios.cjs`, `measure-store.cjs`, `infra/operation-store.cjs`, `licensing/index.cjs` |
 | `ipc/` | every request from the window: who may send it (`guard.cjs`), its exact arguments and what it runs (`channels.cjs`), and what the main process found itself (`offers.cjs`) | `ipc/` only (operations are injected) |
 | `system.cjs` | facade: the one interface `main.cjs` uses (same exports as before the split) | everything below |
 | `features/` | hardware, drivers, gpu-drivers, bios, cleanup, startup, sensors, measurements, recommendations, restore | `infra/`, `domain/`, `privilege/` |
@@ -108,16 +113,22 @@ The plan and the status of every task: `docs/roadmap/`.
 - Never run machine-changing operations (driver installs, cleanup, startup changes, restore points,
   service install) on a real PC to test a change; use mocks, or a disposable Windows VM.
 - Test harnesses must refuse the service pipe (`\\.\pipe\TuneService`) except for the read-only
-  `version` and `sensors` requests. The CI scripts in `scripts/ci/` that change the machine refuse to
+  `version` and `sensors` requests (and `operationStatus` for IDs created by the main process). The CI scripts in `scripts/ci/` that change the machine refuse to
   run outside a GitHub Actions runner; there they may also ask the service for a change that changes
   nothing (`clean` with no categories) to check who may ask, and run a console copy of the service
   with a test `ops.ps1`. Fault injection exists only in a test build of the service
   (`build-service.cjs --test-faults <folder>`, `/define:TUNE_FAULTS`), never in what ships.
+- `npm run release` prints the guarded workflow instructions and publishes nothing; it cannot bypass CI
+  or the configured signing policy. `npm run dist -- --publish never` builds a local test candidate.
 - Publishing a release needs the owner's explicit go-ahead. With it: set the version in
   `package.json`, write `docs/release-notes/v<version>.md` (English and Hebrew), let CI pass on that
   commit, then push the tag `v<version>` (or, where tags can't be pushed, a commit whose message
   contains `[release v<version>]`); `.github/workflows/release.yml` builds on a Windows runner and
-  publishes, and never replaces an existing release. A version with a pre-release part (`1.4.0-beta.1`) becomes a GitHub pre-release, which
+  publishes only after full CI succeeds for that exact commit and a real signing certificate is
+  configured (CSC_LINK: base64 PFX, CSC_KEY_PASSWORD). Exception: the owner explicitly authorized
+  unsigned publication of 1.4.1 on 21 October 2026. That version is built without signing, verified
+  unsigned, and labelled in both languages in its release notes. All other versions require signing. It never replaces an existing release.
+  Ordinary branch pushes produce only a clearly labelled unsigned test-installer artifact. A version with a pre-release part (`1.4.0-beta.1`) becomes a GitHub pre-release, which
   installed copies don't update to by themselves.
 
 ## Audit and roadmap

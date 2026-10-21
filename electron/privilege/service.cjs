@@ -13,6 +13,9 @@ const { runElevated } = require('./elevated.cjs');
 const SERVICE_VERSION = require('./service-version.cjs');
 
 const PIPE = 'TuneService';
+let operationStore = null;
+let recovering = null;
+const setOperationStore = store => { operationStore = store; };
 
 // The official, signed PawnIO installer, pinned to the exact file checked when this was written.
 const PAWNIO_SETUP = {
@@ -71,9 +74,44 @@ async function serviceCompat() {
 async function privileged(req, opts) {
   const compat = await serviceCompat();
   if (compat.state !== 'current') return adminCall(req, opts);
-  const r = await serviceCall(req, opts);
-  if (!r || (r.ok === false && r.code === 'notAllowed')) return adminCall(req, opts);
+  let operationId = null;
+  if (operationStore) {
+    try { operationId = operationStore.begin(req); }
+    catch { return { ok: false, error: 'the operation could not be recorded; nothing was started', code: 'journalUnavailable' }; }
+  }
+  let r;
+  try { r = await serviceCall(operationId ? { ...req, operationId } : req, opts); }
+  catch { r = { ok: false, error: 'the action has no confirmed result; check History before trying again', code: 'noAnswer' }; }
+  if (!r || (r.ok === false && r.code === 'notAllowed')) {
+    if (operationId) try { operationStore.settle(operationId, { ok: false, error: 'not run by the service', code: 'notStarted' }); } catch {}
+    return adminCall(req, opts);
+  }
+  if (operationId) {
+    r = { ...r, operationId };
+    try { operationStore.settle(operationId, r); } catch { /* the durable pending ID still permits recovery */ }
+  }
   return r;
+}
+
+// The local view also supplies conservative comparison boundaries for unconfirmed changes.
+function operationHistoryView(history = []) {
+  if (!operationStore) return [];
+  const recorded = new Set(history.filter(h => h.action !== 'serviceOperation').map(h => h.detail?.operationId).filter(Boolean));
+  return operationStore.read().filter(r => !recorded.has(r.id) && r.result?.code !== 'notStarted').map(r => ({
+    id: r.id, action: 'serviceOperation', at: r.startedAt,
+    detail: { operationId: r.id, op: r.op, operationState: r.state, result: r.result || null },
+  }));
+}
+async function operationHistory(history = []) {
+  if (!operationStore) return [];
+  if (operationStore.read().some(r => ['running', 'unknown'].includes(r.state))) {
+    if (!recovering) recovering = (async () => {
+      if ((await serviceCompat()).state === 'current')
+        await operationStore.recover(id => serviceCall({ op: 'operationStatus', operationId: id }, { timeoutMs: 2000 }));
+    })().finally(() => { recovering = null; });
+    await recovering;
+  }
+  return operationHistoryView(history);
 }
 
 // For Settings: whether the service is installed and running, its version, and whether it is this
@@ -181,6 +219,11 @@ Report-Progress @{ phase = 'service' }
 New-Item -ItemType Directory -Path $root -Force | Out-Null
 Protect-Folder $root
 Assert-Protected $root
+$journal = Join-Path $root 'journal'
+if ((Test-Path -LiteralPath $journal) -and ((Get-Item -LiteralPath $journal -Force).Attributes -band [IO.FileAttributes]::ReparsePoint)) { throw 'operation journal must not be a reparse point' }
+New-Item -ItemType Directory -Path $journal -Force | Out-Null
+Protect-Folder $journal
+Assert-Protected $journal
 if (Test-Path -LiteralPath $dst) { Remove-Item -LiteralPath $dst -Recurse -Force }
 New-Item -ItemType Directory -Path $dst | Out-Null
 foreach ($e in $expected) {
@@ -228,7 +271,7 @@ if (-not (Test-ServiceAnswers ${psString(manifest.version)} 30)) {
 # Older versions go; the previous one stays for one more update. Files of the first layout (directly
 # in the folder, service version 6 and before) go once the new version answers.
 foreach ($d in @(Get-ChildItem -LiteralPath $root -Directory)) {
-  if ($d.FullName -eq $dst -or ($previous -and $previous.Contains($d.FullName + '\\'))) { continue }
+  if ($d.Name -eq 'journal' -or $d.FullName -eq $dst -or ($previous -and $previous.Contains($d.FullName + '\\'))) { continue }
   Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction SilentlyContinue
 }
 Get-ChildItem -LiteralPath $root -File | Where-Object { $_.Name -ne 'PawnIO_setup.exe' } | Remove-Item -Force -ErrorAction SilentlyContinue
@@ -267,6 +310,6 @@ $result = 'removed'`;
 const uninstallService = () => runElevated(uninstallScript());
 
 module.exports = {
-  SERVICE_VERSION, serviceOpsScript, serviceCall, serviceCompat, privileged, serviceStatus, installService, uninstallService,
+  SERVICE_VERSION, serviceOpsScript, serviceCall, serviceCompat, privileged, serviceStatus, setOperationStore, operationHistory, operationHistoryView, installService, uninstallService,
   bundledManifest, validManifest, installScript, uninstallScript,
 };

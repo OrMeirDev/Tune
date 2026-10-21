@@ -22,6 +22,7 @@ const withOffer = (found, fn) => (found.ok ? fn(found.data) : found);
 
 function createChannels(d) {
   const { sys, offers, licensing } = d;
+  const record = (action, detail, result) => d.history.add(action, result?.operationId ? { ...detail, operationId: result.operationId } : detail);
   // Folders shown on the cleanup page open in Explorer; only folders the last scan reported.
   let junkDirs = new Set();
   let measuring = false;
@@ -74,7 +75,9 @@ function createChannels(d) {
       args: [arrayOf(match(GUID, 36), 100), PROGRESS_KEY],
       run: (ids, key) => withOffer(offers.drivers(ids), async (items) => {
         const r = await sys.installDrivers(items.map((i) => i.id), d.progressTo(key));
-        if (r.ok) d.history.add('drivers', { items: items.map((i) => i.title), reboot: r.data.reboot, restore: r.data.restore });
+        if (r.ok) record('drivers', { items: items.map((i) => i.title), reboot: r.data.reboot, restore: r.data.restore,
+          ...(Array.isArray(r.data.results) ? { results: items.map(i => ({ id: i.id, title: i.title, code: r.data.results.find(x => x.id === i.id)?.code ?? null })) } : {}),
+        }, r);
         return r;
       }),
     },
@@ -98,7 +101,7 @@ function createChannels(d) {
       args: [str(1024)],
       run: (id) => withOffer(offers.problemDevice(id), async (p) => {
         const r = await sys.enableDevice(p.id);
-        if (r.ok) d.history.add('enable', { name: p.name });
+        if (r.ok) record('enable', { name: p.name }, r);
         return r;
       }),
     },
@@ -122,7 +125,7 @@ function createChannels(d) {
         const r = await sys.junkClean(cats.map((c) => c.key));
         if (r.ok) {
           const after = await sys.diskFree();
-          const id = d.history.add('clean', { cats: cats.map((c) => c.key), freed: r.data.freed });
+          const id = record('clean', { cats: cats.map((c) => c.key), freed: r.data.freed }, r);
           return { ...r, data: { ...r.data, onDisk: d.measurements.addDiskPair(before, after, id) } };
         }
         return r;
@@ -133,7 +136,7 @@ function createChannels(d) {
       args: [str(100), str(1024), bool()],
       run: (source, key, enable) => withOffer(offers.startupEntry(source, key), async (e) => {
         const r = await sys.startupToggle(e.source, e.key, enable);
-        if (r.ok) d.history.add('startup', { name: e.name, enabled: enable });
+        if (r.ok) record('startup', { name: e.name, enabled: enable }, r);
         return r;
       }),
     },
@@ -162,7 +165,7 @@ function createChannels(d) {
         }
       },
     },
-    'measure:list': { args: [], run: () => ({ ok: true, data: d.measurements.view(d.history.read()) }) },
+    'measure:list': { args: [], run: () => ({ ok: true, data: d.measurements.view(d.history.view ? d.history.view() : d.history.read()) }) },
     'measure:export': { args: [], run: () => d.exportMeasurements() },
 
     'perf:get': { args: [], run: () => sys.performance() },
@@ -172,7 +175,7 @@ function createChannels(d) {
       args: [oneOf(APPLYABLE)],
       run: (key) => withOffer(offers.recommendation(key), async (rec) => {
         const r = await sys.applyRecommendation(rec.key);
-        if (r.ok) d.history.add('setting', { key: rec.key });
+        if (r.ok) record('setting', { key: rec.key }, r);
         return r;
       }),
     },
@@ -180,12 +183,17 @@ function createChannels(d) {
       args: [],
       run: async () => {
         const r = await sys.createRestorePoint('Tune - manual restore point');
-        if (r.ok && r.data === 'created') d.history.add('restore', {});
+        if (r.ok && r.data === 'created') record('restore', {}, r);
         return r;
       },
     },
     'restore:open': { args: [], run: () => sys.openSystemRestore() },
-    'history:get': { args: [], run: () => d.history.read() },
+    'history:get': { args: [], run: async () => {
+      const history = d.history.read();
+      let recovered = [];
+      try { recovered = await sys.operationHistory?.(history) || []; } catch {}
+      return [...history, ...recovered].sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+    } },
     // only https pages, without credentials in the address
     'link:open': { args: [match(/^https:\/\/[^\s@/]+(\/[^\s]*)?$/, 2048)], run: (url) => d.shell.openExternal(url) },
 

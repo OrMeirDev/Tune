@@ -17,16 +17,31 @@ const APP_DIR = path.join(__dirname, '..');
 const OUT_DIR = path.join(__dirname, 'output', path.basename(__filename, '.cjs'));
 fs.mkdirSync(OUT_DIR, { recursive: true });
 const tune = APP_DIR;
-app.setPath('userData', fs.mkdtempSync(path.join(require('os').tmpdir(), 'tune-smoke-')));
+const profile = fs.mkdtempSync(path.join(require('os').tmpdir(), 'tune-smoke-'));
+app.setPath('userData', profile);
 app.on('window-all-closed', () => {});
-const failures = [];
-const check = (name, cond, got) => { console.log(`${cond ? 'PASS' : 'FAIL'} ${name}${got !== undefined ? ` (${JSON.stringify(got)})` : ''}`); if (!cond) failures.push(name); };
-const finish = () => { console.log(failures.length ? `${failures.length} FAILED` : 'ALL PASSED'); app.exit(failures.length ? 1 : 0); };
+// The guide is conditional on CPU family and startup entries vary by image. Explicit SYNTHETIC
+// read-only fixtures keep these UI checks independent of the runner's hardware and registry.
+const sys = require(path.join(tune, 'electron', 'system.cjs'));
+let recommendationsFail = true;
+const sampleRecommendations = async () => ({ ok: true, data: [
+  { key: 'powerLimit', group: 'cpu', cpuKind: 'intelHybrid', intel1314: true, ok: null, guide: 'powerLimit' },
+] });
+sys.recommendations = async () => recommendationsFail ? { ok: false, error: 'SAMPLE first-read failure' } : sampleRecommendations();
+sys.startupList = async () => ({ ok: true, data: [
+  { source: 'HKCU', key: 'TuneSmokeSample', name: 'SAMPLE startup item (not executed)', enabled: true, admin: false },
+] });
+for (const name of ['installDrivers', 'downloadGpuInstaller', 'downloadBios', 'enableDevice', 'junkClean', 'startupToggle', 'applyRecommendation', 'createRestorePoint', 'installService', 'uninstallService', 'adminStart'])
+  sys[name] = async () => { throw new Error('machine changes are blocked in smoke: ' + name); };
+const run = require('./harness.cjs').createRun({ exit: code => app.exit(code) });
+const check = run.check;
+run.onCleanup(() => require('child_process').spawn('node', ['-e', 'setTimeout(() => require("fs").rmSync(process.argv[1], { recursive: true, force: true, maxRetries: 20, retryDelay: 250 }), 3000)', profile], { detached: true, stdio: 'ignore', windowsHide: true }).unref());
 
-app.whenReady().then(async () => {
+run.guard(async () => {
+  run.timeout(240000);
+  await app.whenReady();
   require(path.join(tune, 'electron', 'main.cjs'));
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-  setTimeout(() => { console.log('TIMEOUT'); app.exit(1); }, 240000);
   let win; while (!(win = BrowserWindow.getAllWindows()[0])) await wait(20);
   const errors = [];
   win.webContents.on('console-message', (e, level, message) => { if (level >= 3) errors.push(message); });
@@ -45,6 +60,11 @@ app.whenReady().then(async () => {
   }
   // the dialogs: power-limit guide from the performance center
   await js(`[...document.querySelectorAll('.nav-item')].find((b) => /מרכז ביצועים|Performance center/.test(b.textContent))?.click()`); await wait(1500);
+  const retry = await js(`({ failed: !!document.querySelector('.scan-failed'), enabled: document.querySelector('header .btn-ghost')?.disabled === false })`);
+  check('a failed first recommendation read is explicit and retry stays available', retry?.failed && retry?.enabled, retry);
+  recommendationsFail = false;
+  await js(`document.querySelector('header .btn-ghost')?.click()`); await wait(1000);
+  check('retry recovers the recommendation page without a restart', await js(`!document.querySelector('.scan-failed') && [...document.querySelectorAll('button')].some(b => /איך עושים|How to/.test(b.textContent))`));
   await js(`[...document.querySelectorAll('button')].find((b) => /איך עושים|How to/.test(b.textContent))?.click()`); await wait(600);
   check('the power-limit guide opens', (await js(`document.querySelector('.modal h2')?.textContent || ''`)).length > 0);
   const a11y = await js(`({ role: document.querySelector('.modal')?.getAttribute('role'), labelled: !!document.getElementById(document.querySelector('.modal')?.getAttribute('aria-labelledby') || 'x'), focusInside: !!document.querySelector('.modal')?.contains(document.activeElement) })`);
@@ -55,5 +75,4 @@ app.whenReady().then(async () => {
   const sw = await js(`[[...document.querySelectorAll('.toggle')].length, [...document.querySelectorAll('[role=switch][aria-checked]')].length]`);
   check('every startup switch is a labelled switch', sw[0] > 0 && sw[0] === sw[1], sw);
   check('no renderer errors', errors.length === 0, errors);
-  finish();
 });

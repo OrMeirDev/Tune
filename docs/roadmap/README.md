@@ -20,7 +20,7 @@ decisions (see the end).
 | P07 | Upgrade advice (PF08) | Not started; needs P01, P05 |
 | L00 | Licence policy and choice of service | Open decisions (below) |
 | L01 | Server and one-time redemption | **Proof of concept completed**: `licensing/` (not shipped in the installer); run `node --test "licensing/**/*.test.cjs"` |
-| L02 | Activation and recovery inside Tune | **Implemented and repaired after three reviews (R01–R08), Windows validation pending**: main-process client, renewal while Tune runs, confirmed release, Settings flow in English and Hebrew, entitlement mechanism (shipped policy: open). Verified off Windows with a DPAPI stand-in; the Windows steps below are not done yet |
+| L02 | Activation and recovery inside Tune | **Implemented, automatic Windows CI coverage**: main-process client, R01–R08, renewal/release/recovery, real DPAPI and identity, packaged defaults. Client-edition hardware/session checks remain in [Windows validation](../windows-validation.md) |
 | L03 | Admin and manual sale | Not started (the PoC has the admin issuing call only) |
 | L04 | Automatic payment | Not started; needs a payment provider |
 | L05 | Self-service recovery | Not started (L02 recovers on the same PC; moving to another PC needs a release, which only the server API offers) |
@@ -102,7 +102,7 @@ the same PC, device release. Not part of the Tune build.
 
 ### L02: activation and recovery in Tune (`electron/licensing/`, `src/features/license/`)
 
-What is implemented and tested off Windows:
+Implemented behavior (automated Windows coverage is listed in [Windows validation](../windows-validation.md)):
 
 - **What ships and what doesn't**: the app's licensing client lives in `electron/licensing/` (packed
   with the app); it shares the certificate check, device keys and Serial rules with the server PoC,
@@ -234,8 +234,9 @@ Windows 10 and 11 clients, as listed below and in [`docs/windows-validation.md`]
   other start-up checks still run). Reading it through the service needs a new read-only service
   operation, which means changing `service/TuneService.cs`'s operation list and testing the service
   upgrade on a VM (see TUN-01/TUN-12). It was left out on purpose.
-- The PowerShell for start-up records is parse-checked by `npm test` on Windows (CI) but has not been
-  run on a real PC yet; the event fields (`BootStartTime`, `MainPathBootTime`, `BootPostBootTime`,
+- The PowerShell for start-up records is parse-checked and query-classification tested by `npm test`
+  on Windows. The owner-supplied f6c6fba report confirms the access-denied path on one real Windows 11
+  PC. Readable log values and boot-pairing still require real restarts; the event fields (`BootStartTime`, `MainPathBootTime`, `BootPostBootTime`,
   event 27's boot type) need one check on Windows 10 and 11.
 - Thresholds (45 s to the desktop, 60 s after it, 25% background load, 85% memory) are Tune's own
   judgement; the temperature ones match the existing cooling findings.
@@ -273,3 +274,17 @@ Windows 10 and 11 clients, as listed below and in [`docs/windows-validation.md`]
 | Purchase and support | payment provider, ownership binding, delivery, refunds, recovery path |
 | Licensing service | a service such as Keygen behind a small adapter vs an own server (cost, data export, one-time redemption support) |
 
+
+## Core candidate completion (2026-10-20)
+
+The 1.4.1 candidate completes maintenance of the current feature set: denied boot-log
+classification, bounded screenshot capture, audited locked dependencies, per-vendor redirects,
+firmware applicability checks, sensor provenance/freshness, and durable service-operation results
+without replay (service 11). Partial driver installations are distinguished from complete ones.
+
+See [audit status](../audit/STATUS.md), [Windows validation](../windows-validation.md) and
+[candidate notes](../release-notes/v1.4.1.md). The release workflow requires full CI on the exact
+commit and a production certificate; ordinary pushes upload a test-only installer.
+
+P02–P07 remain future product work, and L03–L05 remain paid-service development subject to L00.
+Completing this core candidate does not claim those features or a production licensing backend.

@@ -36,7 +36,17 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-fund --no-audit
+      - run: npm audit --audit-level=moderate
       - run: npm test
+      - name: licensing concurrency stability (five fresh process groups; every run must pass)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: |
+          1..5 | ForEach-Object {
+            Write-Output "Concurrency run $_ of 5"
+            node --test licensing/tests/race.test.cjs
+            if ($LASTEXITCODE) { throw "licensing concurrency run $_ failed" }
+          }
       - run: npm run build
       - name: main-process syntax
         shell: pwsh
@@ -53,17 +63,26 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci --no-fund --no-audit
+      - name: every page and the basic keyboard flow
+        run: npm run e2e:smoke
       - name: licensing (real DPAPI and machine id, against the PoC server)
         run: npm run e2e:licensing
       - name: licensing at start-up (new profiles, timed; a slow and a failing identity read)
         if: ${{ !cancelled() }}
         run: npm run e2e:licensing-startup
+      - name: all-good animation and one chime per scan
+        if: ${{ !cancelled() }}
+        run: npm run e2e:celebration
       - name: locked IPC connection
         if: ${{ !cancelled() }}
         run: npm run e2e:ipc-probes
       - name: layout (en/he, smallest and typical window)
         if: ${{ !cancelled() }}
         run: npm run e2e:layout
+      - name: UI polish (all ten pages, en/he, details and existing actions; synthetic PC)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: npm run e2e:ui-polish
       - name: failed scans are never shown as fine
         if: ${{ !cancelled() }}
         run: npm run e2e:scan-failure
@@ -98,6 +117,7 @@ jobs:
         run: |
           $c = New-SelfSignedCertificate -Type CodeSigningCert -Subject 'CN=Tune CI throwaway signing' -CertStoreLocation Cert:\CurrentUser\My -NotAfter (Get-Date).AddDays(1)
           $pw = [guid]::NewGuid().ToString()
+          Write-Output "::add-mask::$pw"
           $pfx = Join-Path $env:RUNNER_TEMP 'ci-signing.pfx'
           Export-PfxCertificate -Cert $c -FilePath $pfx -Password (ConvertTo-SecureString $pw -AsPlainText -Force) | Out-Null
           foreach ($name in 'Root', 'TrustedPublisher') {
@@ -110,10 +130,17 @@ jobs:
         run: npm run dist -- --publish never
       - name: packed contents; development licensing overrides ignored
         run: node scripts/ci/packaged-check.cjs
+      - name: real DPAPI across two Windows users (synthetic licence)
+        if: ${{ !cancelled() }}
+        shell: pwsh
+        run: ./scripts/ci/dpapi-users-check.ps1
       - name: service deadlines (a console copy with a hanging test operation)
         if: ${{ !cancelled() }}
         shell: pwsh
         run: ./scripts/ci/service-deadlines-check.ps1
+      - name: durable service results after disconnect and restart (isolated console copy)
+        if: ${{ !cancelled() }}
+        run: node scripts/ci/service-journal-check.cjs
       - name: service containment (a test build that makes each native step fail in turn)
         if: ${{ !cancelled() }}
         shell: pwsh
@@ -148,3 +175,25 @@ jobs:
       - name: install 1.3.1, then this build over it
         shell: pwsh
         run: ./scripts/ci/upgrade-check.ps1
+
+      - name: test installer checksum
+        if: ${{ success() }}
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem release -Filter 'Tune-Setup-*.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'no test installer' }
+          $hash = (Get-FileHash -LiteralPath $setup.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $($setup.Name)" | Set-Content release/SHA256SUMS.txt
+          'UNSIGNED TEST CANDIDATE. Disposable VM testing only. Not a published release. No production signing certificate is configured in this job.' | Set-Content release/TEST-CANDIDATE.txt
+      - name: test installer (unsigned, never published)
+        if: ${{ success() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Tune-test-installer-${{ github.sha }}
+          path: |
+            release/Tune-Setup-*.exe
+            release/Tune-Setup-*.exe.blockmap
+            release/SHA256SUMS.txt
+            release/TEST-CANDIDATE.txt
+          retention-days: 14
+          if-no-files-found: error

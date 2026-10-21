@@ -2,13 +2,14 @@
 // process' progress events), the result in the shell's banner. Actions that need admin rights show
 // "waiting for approval" until Windows' prompt is answered, unless the background service or a
 // recent admin session covers them.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api.js';
 import { errText } from '../presentation/format.jsx';
 
 export function useOperations({ t, service, adminUntil, setAdminUntil, setMsg }) {
   const [busy, setBusy] = useState(null);
   const [prog, setProg] = useState({});
+  const inFlight = useRef(false);
 
   useEffect(() => api?.onProgress((p) => setProg((m) => ({ ...m, [p.key]: p }))), []);
 
@@ -17,15 +18,22 @@ export function useOperations({ t, service, adminUntil, setAdminUntil, setMsg })
   const lockWhile = (cond) => busy || (cond ? 'stale' : null);
 
   const act = async (key, fn, done, { admin = false } = {}) => {
+    if (inFlight.current) return { ok: false, error: 'busy' };
+    inFlight.current = true;
     setBusy(key);
     setMsg(null);
     const prompt = admin && !(service?.running && service.current) && adminUntil - Date.now() < 4000;
     setProg((m) => ({ ...m, [key]: prompt ? { phase: 'auth' } : null }));
-    const r = await fn();
-    setBusy(null);
-    setProg((m) => ({ ...m, [key]: null }));
-    if (admin || r?.adminUntil) api.adminStatus().then(setAdminUntil);
-    if (!r?.ok) setMsg({ kind: 'err', text: errText(r?.error, t) });
+    let r;
+    try { r = await fn(); }
+    catch { r = { ok: false, error: 'no answer in time', code: 'noAnswer' }; }
+    finally {
+      inFlight.current = false;
+      setBusy(null);
+      setProg((m) => ({ ...m, [key]: null }));
+    }
+    if (admin || r?.adminUntil) Promise.resolve().then(() => api.adminStatus()).then(setAdminUntil).catch(() => {});
+    if (!r?.ok) setMsg({ kind: 'err', text: r?.code === 'noAnswer' ? t('err.noAnswer') : errText(r?.error, t) });
     else if (done) setMsg({ kind: 'info', text: done(r.data) });
     return r;
   };

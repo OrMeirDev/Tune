@@ -90,6 +90,12 @@ if ($env:TUNE_CI_SIGNER -and $current) {
 #     so it changes nothing even where it is allowed (scripts/ci/service-probe.cjs).
 $admin = (node scripts/ci/service-probe.cjs noop-change) | ConvertFrom-Json
 Check 'TUN-01: an administrator may ask for a change' ($admin.ok -and [int64]$admin.data.freed -eq 0) ($admin | ConvertTo-Json -Compress)
+$journal = Join-Path $svcRoot 'journal'
+Check 'journal: created under the protected service root' (Test-Path -LiteralPath $journal -PathType Container)
+if (Test-Path -LiteralPath $journal) {
+  $journalWriters = @(Writers $journal)
+  Check 'journal: only administrators and SYSTEM can change recorded results' ($journalWriters.Count -eq 0) ($journalWriters -join ', ')
+}
 $user = 'tunestd'
 # 14 characters: net.exe asks for confirmation (and gets none in CI) above that
 $pw = 'Tn' + [guid]::NewGuid().ToString('N').Substring(0, 9) + '!a1'

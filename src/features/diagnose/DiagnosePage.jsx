@@ -5,6 +5,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, BookOpen, Check, HelpCircle, Info, Loader2, RefreshCw } from 'lucide-react';
 import { api } from '../../api.js';
+import { DetailsDisclosure } from '../../components/DetailsDisclosure.jsx';
 import { ProgressPill } from '../../components/TaskProgress.jsx';
 import { diagnose } from '../../domain/diagnosis.mjs';
 import { useT } from '../../i18n.js';
@@ -139,7 +140,9 @@ export function DiagnosePage({ problem, onProblem, recs, gpu, startup, perf, his
             </div>
             {d.state === 'nothingFound' && <div className="finding ok dx-verdict"><Info size={15} /><div>{t('dx.v.nothingNote')}</div></div>}
             {d.findings.map((f) => <FindingRow key={f.key} f={f} recs={recs} onAction={onAction} busy={busy} prog={prog} />)}
-            {d.limits.map((l) => <div key={l} className="dmeta dx-limit"><Info size={13} /> {t(`dx.limit.${l}`)}</div>)}
+            {d.limits.length > 0 && <DetailsDisclosure label={t('ui.checkLimits')} className="check-limits">
+              {d.limits.map((l) => <p key={l} className="dx-limit"><Info size={13} /> {t(`dx.limit.${l}`)}</p>)}
+            </DetailsDisclosure>}
           </>)}
         </section>
         <BeforeAfter view={view} onMeasure={onMeasure} onExport={onExport} busy={busy} prog={prog} scanning={scanning} />

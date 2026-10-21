@@ -34,7 +34,7 @@ const REST_MAX_AGE_MS = 7 * 24 * 3600 * 1000;
 // only those taken after the previous such change and before the next one, so an effect is never
 // credited to the wrong change. A cleanup only deletes files (it has its own before/after pair);
 // downloads and restore points change nothing that is measured.
-const BOUNDARIES = ['startup', 'setting', 'drivers', 'enable', 'service'];
+const BOUNDARIES = ['startup', 'setting', 'drivers', 'enable', 'service', 'serviceOperation'];
 // What a change could have affected, and how the "after" is taken (see actionComparisons).
 const EFFECTS = {
   clean: { metrics: ['diskFreeBytes'], paired: true },
@@ -256,7 +256,16 @@ function latestByMetric(records = []) {
   return out;
 }
 
-module.exports = {
+// Windows' filtered query can hide access denial behind NoMatchingEventsFound. A log with no
+// event 100 counts as empty only after an independent, read-only access probe succeeded.
+function bootTimingStatus({ timingQuery, timingLog } = {}) {
+  if (timingQuery === 'denied' || timingLog === 'denied') return 'needsAdmin';
+  if (timingQuery === 'ok') return 'ok';
+  if (timingQuery === 'noMatch' && ['readable', 'empty'].includes(timingLog)) return 'none';
+  return 'unavailable';
+}
+
+module.exports = { bootTimingStatus,
   METRICS, BOOT_TYPES, MIN_REST_SAMPLES, REST_LOAD, EFFECTS, BOUNDARIES,
   median, record, validRecord, summarizeRest, diskPair, bootRecords, bootFacts, comparable, compare, aroundChange, actionComparisons, latestByMetric,
 };

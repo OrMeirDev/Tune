@@ -25,6 +25,7 @@ using System.IO.Pipes;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
+using System.Security.Cryptography;
 using System.Security.Principal;
 using System.ServiceProcess;
 using System.Text;
@@ -70,6 +71,7 @@ namespace Tune
         };
         // Console runs only (testing a build as yourself, never the installed service): a shorter limit.
         static int consoleOperationSeconds;
+        static bool consoleMode;
 
         readonly string dir = AppDomain.CurrentDomain.BaseDirectory;
         readonly object opLock = new object();
@@ -79,6 +81,7 @@ namespace Tune
         {
             if (args.Length > 0 && args[0] == "--console")
             {
+                consoleMode = true;
                 for (int i = 1; i + 1 < args.Length; i += 2)
                 {
                     if (args[i] == "--pipe") PipeName = args[i + 1];
@@ -177,6 +180,12 @@ namespace Tune
                     string op = req != null && req.ContainsKey("op") ? Convert.ToString(req["op"]) : "";
                     if (op == "version") { Send(writer, Ok(Info())); return; }
                     if (op == "sensors") { Send(writer, Ok(Sensors())); return; }
+                    if (op == "operationStatus")
+                    {
+                        var status = Journal.Status(req.ContainsKey("operationId") ? Convert.ToString(req["operationId"]) : "", CallerSid(pipe));
+                        Send(writer, status == null ? Fail("no operation recorded for this user", "notFound") : Ok(status));
+                        return;
+                    }
                     if (!Operations.ContainsKey(op)) { Send(writer, Fail("unknown request", null)); return; }
                     if (!CallerIsAdministrator(pipe))
                     {
@@ -193,7 +202,23 @@ namespace Tune
                         string stillRunning = SettleUnconfirmed();
                         if (stillRunning != null) { Send(writer, Fail(stillRunning, "busy")); return; }
                         int limitMs = consoleOperationSeconds > 0 ? consoleOperationSeconds * 1000 : Operations[op] * 60 * 1000;
-                        RunOperation(line, writer, limitMs);
+                        string id = req.ContainsKey("operationId") ? Convert.ToString(req["operationId"]) : Guid.NewGuid().ToString("D");
+                        Dictionary<string, object> previous;
+                        try
+                        {
+                            uint pid = CallerPid(pipe);
+                            previous = Journal.Begin(id, op, CallerSid(pipe), pid, CallerImage(pid), RequestHash(line));
+                        }
+                        catch (Exception e) { Send(writer, Fail("the operation was not started: " + e.Message, "journalUnavailable")); return; }
+                        if (previous != null)
+                        {
+                            Send(writer, previous.ContainsKey("result") ? new JavaScriptSerializer().Serialize(previous["result"]) :
+                                Fail("this operation was already accepted; query its status instead of running it again", "noAnswer"));
+                            return;
+                        }
+                        string answer = RunOperation(line, writer, limitMs);
+                        try { Send(writer, new JavaScriptSerializer().Serialize(Journal.Finish(id, answer))); }
+                        catch (Exception) { Send(writer, Fail("the change may have run, but its result could not be saved; do not repeat it", "noAnswer")); }
                     }
                     finally { Monitor.Exit(opLock); }
                 }
@@ -273,6 +298,47 @@ namespace Tune
                 return false;
             }
             finally { Marshal.FreeHGlobal(buf); }
+        }
+
+        // The journal sits next to the version folders, in the installer's protected root.
+        // Console/test copies keep their own isolated journal. No filesystem path comes from a request.
+        readonly object journalGate = new object();
+        OperationJournal journal;
+        OperationJournal Journal
+        {
+            get
+            {
+                lock (journalGate)
+                {
+                    if (journal == null) journal = new OperationJournal(
+                        Path.Combine(consoleMode ? dir : Path.GetDirectoryName(dir.TrimEnd(Path.DirectorySeparatorChar)), "journal"),
+                        Guid.NewGuid().ToString("D"), !consoleMode);
+                    return journal;
+                }
+            }
+        }
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool GetNamedPipeClientProcessId(IntPtr pipe, out uint pid);
+        static uint CallerPid(NamedPipeServerStream pipe)
+        {
+            uint pid;
+            return GetNamedPipeClientProcessId(pipe.SafePipeHandle.DangerousGetHandle(), out pid) ? pid : 0;
+        }
+        static string CallerImage(uint pid)
+        {
+            try { using (var p = Process.GetProcessById((int)pid)) return p.ProcessName; }
+            catch (Exception) { return null; }
+        }
+        static string CallerSid(NamedPipeServerStream pipe)
+        {
+            string sid = null;
+            try { pipe.RunAsClient(delegate { using (var id = WindowsIdentity.GetCurrent()) { if (!id.IsAnonymous) sid = id.User.Value; } }); }
+            catch (Exception) { }
+            return sid;
+        }
+        static string RequestHash(string request)
+        {
+            using (var sha = SHA256.Create()) return Convert.ToBase64String(sha.ComputeHash(Encoding.UTF8.GetBytes(request)));
         }
 
         // ---------- running an operation, contained, with a deadline (audit TUN-06) ----------
@@ -403,7 +469,7 @@ namespace Tune
             }
         }
 
-        sealed class OperationState { public bool Answered; public bool Closed; }
+        sealed class OperationState { public bool Answered; public bool Closed; public string Result; }
 
         // Operations whose end Windows hasn't confirmed. Only touched while opLock is held.
         readonly List<Contained> unconfirmed = new List<Contained>();
@@ -562,7 +628,7 @@ namespace Tune
                             {
                                 if (state.Closed) return;
                                 if (l.StartsWith("PROGRESS ")) Send(writer, "{\"progress\":" + l.Substring(9) + "}");
-                                else if (l.StartsWith("RESULT ")) { Send(writer, l.Substring(7)); state.Answered = true; }
+                                else if (l.StartsWith("RESULT ")) { state.Result = l.Substring(7); state.Answered = true; }
                             }
                         }
                     }
@@ -578,14 +644,15 @@ namespace Tune
         // normal user could touch. If Tune disconnects, the operation still finishes, unless it runs past
         // its limit: then it is ended with everything it started, and answered "timedOut" (with
         // "stopped": false when Windows hasn't confirmed that yet).
-        void RunOperation(string line, StreamWriter writer, int limitMs)
+        string RunOperation(string line, StreamWriter writer, int limitMs)
         {
             Contained c;
             string refused = Contain(line, out c);
-            if (refused != null) { Send(writer, Fail(refused, "containmentFailed")); return; }
+            if (refused != null) return Fail(refused, "containmentFailed");
             var state = new OperationState();
             Thread reader = null;
             bool ended = false;
+            bool finished = false;
             string answer = null;
             try
             {
@@ -595,14 +662,14 @@ namespace Tune
                     c.Error = ErrorOf("resume");
                     ended = EndAll(c);
                     answer = Fail(Refused("Windows could not let it run", c.Error), "containmentFailed");
-                    return;
+                    return answer;
                 }
-                bool finished = WaitForSingleObject(c.Process, (uint)limitMs) == WaitObject0;
+                finished = WaitForSingleObject(c.Process, (uint)limitMs) == WaitObject0;
                 if (finished) reader.Join(OutputGraceMs);
                 // anything it left running ends with the job; past its limit, everything does
                 ended = EndAll(c);
                 reader.Join(OutputGraceMs);
-                if (finished) answer = Fail("operation ended without a result", null);
+                if (finished) answer = Fail("operation ended without a result; the change may have run", "noAnswer");
                 else if (ended) answer = Fail("the operation did not finish in time and was stopped", "timedOut");
                 else answer = Fail("the operation did not finish in time; Windows has not confirmed that it stopped (" + StillRunning(c) +
                     "), so no other change starts until it has", "timedOut", false);
@@ -610,15 +677,18 @@ namespace Tune
             catch (Exception e)
             {
                 ended = EndAll(c);
-                answer = Fail("the operation failed: " + e.Message, null);
+                answer = Fail("the operation result could not be confirmed: " + e.Message, "noAnswer", ended);
             }
             finally
             {
-                bool answered;
-                lock (state) { state.Closed = true; answered = state.Answered; }
-                if (!answered && answer != null) Send(writer, answer);
+                lock (state)
+                {
+                    state.Closed = true;
+                    if (state.Answered && finished && ended) answer = state.Result;
+                }
                 if (ended) c.Close(); else Remember(c);
             }
+            return answer ?? Fail("operation outcome is unknown", "noAnswer");
         }
 
         // Lines from the operation's output thread and from this one never interleave.
@@ -723,10 +793,18 @@ namespace Tune
             if (power != null && power.Value.Value > 0 && power.Value.Value < 1000) r["cpuPowerW"] = Round(power.Value.Value);
             var volt = Find(h, SensorType.Voltage, s => s.Name == "CPU Core")
                 ?? Find(h, SensorType.Voltage, s => s.Name.Contains("SVI") && s.Name.StartsWith("Core"));
+            string voltageSource = "core";
             if (volt == null)
+            {
+                voltageSource = "vid";
                 foreach (var s in h.Sensors)
                     if (s.SensorType == SensorType.Voltage && s.Value.HasValue && s.Name.Contains("VID") && (volt == null || s.Value.Value > volt.Value.Value)) volt = s;
-            if (volt != null && volt.Value.Value > 0.3 && volt.Value.Value < 2.0) r["cpuVoltageV"] = Math.Round(volt.Value.Value, 3);
+            }
+            if (volt != null && volt.Value.Value > 0.3 && volt.Value.Value < 2.0)
+            {
+                r["cpuVoltageV"] = Math.Round(volt.Value.Value, 3);
+                r["cpuVoltageSource"] = voltageSource;
+            }
             float clock = 0;
             foreach (var s in h.Sensors)
                 if (s.SensorType == SensorType.Clock && s.Value.HasValue && s.Name.Contains("Core") && s.Value.Value > clock && s.Value.Value < 10000) clock = s.Value.Value;
@@ -773,6 +851,8 @@ namespace Tune
             var gpus = new List<object>();
             lock (SensorLock)
             {
+                // Stamp before Update, so a slow hardware query does not masquerade as fresh.
+                r["sampledAt"] = DateTime.UtcNow.ToString("o");
                 var hw = All(Hw().Hardware).ToList();
                 foreach (var h in Hw().Hardware) h.Update();
                 foreach (var h in hw)

@@ -39,8 +39,12 @@ const HARDWARE = { ok: true, data: {
   gpus: [{ name: 'NVIDIA GeForce RTX 4070', driverVersion: '32.0.15.6094', pnp: 'PCI\\VEN_10DE&DEV_2786' }], devices: [], problems: [],
 } };
 sys.scanHardware = async () => HARDWARE;
-const realJunk = sys.junkScan;
-const realStartup = sys.startupList;
+// These healthy inputs are not what this test varies. Use the same synthetic PC on every host,
+// including hosts without PowerShell, so the three failure states below are actually exercised.
+const sample = require('./ui-samples.cjs');
+const realJunk = async () => ({ ok: true, data: sample.junk });
+const realStartup = async () => ({ ok: true, data: sample.startup });
+sys.recommendations = async () => ({ ok: true, data: sample.recommendations });
 sys.driverUpdates = async () => (mode === 1 ? { ok: false, error: 'Windows Update service did not answer' } : { ok: true, data: [] });
 // the real failure shape: the adapter answers, and the card carries the error (R1)
 sys.gpuVendorCheck = async (gpus) => ({ ok: true, data: (gpus || []).map((g) => (mode === 3 ? { status: 'error', gpu: g.name, vendor: 'NVIDIA', error: 'catalog unavailable' } : { status: 'ok', gpu: g.name, vendor: 'AMD', newer: false })) });
@@ -68,6 +72,7 @@ app.whenReady().then(async () => {
   const shot = async (n) => { win.webContents.invalidate(); await wait(200); fs.writeFileSync(path.join(OUT_DIR, n), (await win.webContents.capturePage()).toPNG()); };
   const settle = async () => { await wait(800); while (await js(`!!document.querySelector('.dot-off')`)) await wait(300); await wait(2200); };
   const go = (re) => js(`[...document.querySelectorAll('.nav-item')].find((b) => ${re}.test(b.textContent))?.click()`);
+  const centerRow = (re) => js(`(() => { const r = [...document.querySelectorAll('.drow')].find(r => ${re}.test(r.querySelector('.dname')?.textContent || '')); return r ? { text: r.textContent, healthy: !!r.querySelector('.dicon.good, .ok-text') } : null; })()`);
   const updates = () => js(`({ allGood: !!document.querySelector('.all-good'), incomplete: !!document.querySelector('.scan-incomplete'), partial: !!document.querySelector('.partial-scan'), rows: document.querySelectorAll('.panel .drow').length, upToDate: document.querySelectorAll('.stats.tiled .stat b')[2]?.textContent, chimes: window.__chimes })`);
   const rescan = async () => { await go('/^Updates/'); await wait(500); await js(`document.querySelector('header .btn-primary')?.click()`); await settle(); };
 
@@ -83,20 +88,26 @@ app.whenReady().then(async () => {
   check('2 ASUS catalog fails: no celebration (R2)', !u.allGood, u);
   check('2 ASUS catalog fails: "scan did not finish"', u.incomplete);
   await shot('2-asus-fails.png');
+  await go('/^Performance center/'); await wait(1500);
+  const failedBios = await centerRow('/\\bBIOS\\b/i');
+  check('2 ASUS catalog fails: the center is unchecked, never OK', failedBios && /not checked/i.test(failedBios.text) && !failedBios.healthy, failedBios);
 
   mode = 3; await rescan(); u = await updates();
   check('3 NVIDIA fails + BIOS update: no celebration (R1)', !u.allGood, u);
   check('3 NVIDIA fails + BIOS update: the update is shown', u.rows === 1);
   check('3 NVIDIA fails + BIOS update: "not checked" note', u.partial);
   await shot('3-gpu-fails.png');
+  await go('/^Performance center/'); await wait(1500);
+  const failedGpu = await centerRow('/Graphics driver/i');
+  check('3 NVIDIA catalog fails: the center is unchecked, never OK', failedGpu && /not checked/i.test(failedGpu.text) && !failedGpu.healthy, failedGpu);
 
   mode = 4; await rescan();
   await go('/^Overview/'); await wait(1200);
   const ov = await js(`[...document.querySelectorAll('.ocard .ohead')].map((h) => h.textContent)`);
   check('4 cleanup/startup fail: overview shows "—", not a size or a count (R3)', ov && ov.some((t) => /cleanups*—/i.test(t)) && ov.some((t) => /Windowss*—/.test(t)), ov);
   await go('/^Performance center/'); await wait(1500);
-  const rows = await js(`[...document.querySelectorAll('.drow')].map((r) => r.textContent).filter((t) => /Leftover|Startup apps|not checked/.test(t))`);
-  check('4 cleanup/startup fail: the center says "not checked" (R3)', rows && rows.filter((t) => /not checked/.test(t)).length >= 2, rows);
+  const rows = await js(`[...document.querySelectorAll('.drow')].filter(r => /Unneeded files|Apps that start with Windows/i.test(r.querySelector('.dname')?.textContent || '')).map(r => ({ text: r.textContent, healthy: !!r.querySelector('.dicon.good, .ok-text') }))`);
+  check('4 cleanup/startup fail: both center rows say "not checked" and neither is OK (R3)', rows?.length === 2 && rows.every(r => /not checked/i.test(r.text) && !r.healthy), rows);
   await go('/^Cleanup/'); await wait(800);
   check('4 cleanup/startup fail: the cleanup page says the scan failed', await js(`!!document.querySelector('.scan-failed')`));
   await shot('4-optional-scans-fail.png');

@@ -1,6 +1,6 @@
 {
   "name": "tune",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Tune - driver updater and PC optimizer",
   "author": "Or meir Tzarfati",
   "main": "electron/main.cjs",
@@ -11,7 +11,7 @@
     "build": "vite build",
     "start": "npm run build:service && electron .",
     "dist": "npm run build:service && vite build && electron-builder --win nsis --x64",
-    "release": "npm run build:service && vite build && electron-builder --win nsis --x64 --publish always",
+    "release": "node scripts/release.cjs",
     "build:service": "node scripts/build-service.cjs",
     "e2e:celebration": "vite build && electron e2e/celebration.cjs",
     "e2e:ipc-probes": "vite build && electron e2e/ipc-probes.cjs",
@@ -21,14 +21,15 @@
     "e2e:scan-failure": "vite build && electron e2e/scan-failure.cjs",
     "e2e:screenshots": "vite build && electron e2e/screenshots.cjs",
     "e2e:service-update": "vite build && electron e2e/service-update.cjs",
-    "e2e:smoke": "vite build && electron e2e/smoke.cjs"
+    "e2e:smoke": "vite build && electron e2e/smoke.cjs",
+    "e2e:ui-polish": "vite build && electron e2e/ui-polish.cjs"
   },
   "repository": "github:OrMeirDev/Tune",
   "dependencies": {
     "electron-updater": "^6.8.9"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.3.4",
+    "@vitejs/plugin-react": "^5.2.0",
     "concurrently": "^9.1.0",
     "cross-env": "^7.0.3",
     "electron": "44.7.2",
@@ -36,8 +37,9 @@
     "lucide-react": "^0.460.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "vite": "^5.4.11",
-    "wait-on": "^8.0.1"
+    "vite": "^7.3.7",
+    "wait-on": "^8.0.1",
+    "esbuild": "^0.25.12"
   },
   "build": {
     "appId": "com.tune.optimizer",
@@ -97,5 +99,11 @@
       "multiLanguageInstaller": true,
       "displayLanguageSelector": false
     }
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "overrides": {
+    "@electron/get": "5.1.0"
   }
 }

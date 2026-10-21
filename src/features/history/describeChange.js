@@ -14,6 +14,7 @@ export function describeChange(h, t) {
     case 'startup': return t(d.enabled ? 'h.startupOn' : 'h.startupOff', { name: d.name });
     case 'setting': return t('h.setting', { title: d.key ? t(`rec.${d.key}.title`) : d.title });
     case 'restore': return t('h.restore');
+    case 'serviceOperation': return t('h.operation', { op: t(`h.op.${d.op}`), state: t(`h.state.${d.operationState}`) });
     default: return h.action;
   }
 }

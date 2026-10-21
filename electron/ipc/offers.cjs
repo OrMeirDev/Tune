@@ -30,11 +30,13 @@ function createOffers() {
 
     // the board as the hardware scan saw it, for the BIOS check
     board() {
+      if (!fresh('hw')) return no(STALE);
       const h = last.hw;
       if (!h) return no('no hardware scan yet');
       return { ok: true, data: { maker: h.boardMaker, model: h.boardModel, version: h.bios?.version, date: h.bios?.date, systemMaker: h.systemMaker, systemModel: h.systemModel, systemSku: h.systemSku } };
     },
     gpus() {
+      if (!fresh('hw')) return no(STALE);
       const h = last.hw;
       return h ? { ok: true, data: { gpus: h.gpus || [], amdSoftware: h.amdSoftware || null } } : no('no hardware scan yet');
     },
@@ -47,15 +49,15 @@ function createOffers() {
       const items = ids.map((id) => offered.get(String(id).toLowerCase()));
       return items.every(Boolean) ? { ok: true, data: items } : no('update not offered');
     },
-    // a newer graphics driver found for this GPU (by its name, as the check reported it)
+    // A newer driver, or AMD's explicit autodetect tool, found by main for this GPU.
     gpuDriver(gpu) {
-      if (!fresh('gpu')) return no(STALE);
-      const g = [].concat(last.gpu || []).find((x) => x.gpu === gpu && x.newer && x.url);
+      if (!fresh('hw') || !fresh('gpu')) return no(STALE);
+      const g = [].concat(last.gpu || []).find((x) => x.gpu === gpu && x.url && (x.newer || (x.vendor === 'AMD' && x.installerKind === 'autodetect' && x.status === 'ok')));
       return g ? { ok: true, data: g } : no('no driver offered for this GPU');
     },
     // the newer BIOS the maker's catalog offered
     bios() {
-      if (!fresh('bios')) return no(STALE);
+      if (!fresh('hw') || !fresh('bios')) return no(STALE);
       const b = last.bios;
       return b && b.supported && b.newer && b.latest?.url ? { ok: true, data: b } : no('no BIOS offered');
     },

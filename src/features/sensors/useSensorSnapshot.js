@@ -1,6 +1,7 @@
 // Live CPU readings, polled while a page that shows them is open.
 import { useEffect, useState } from 'react';
 import { api } from '../../api.js';
+import { freshLive } from '../../domain/live-freshness.mjs';
 
 // ---------------- performance center ----------------
 
@@ -13,17 +14,25 @@ export function useLiveSensors(on) {
     if (!on || !api?.sensors) return undefined;
     let stop = false;
     let timer;
+    setLive(null);
+    setHistory([]);
+    const expire = setInterval(() => {
+      const now = Date.now();
+      setLive(v => freshLive(v, now));
+      setHistory(h => h.filter(v => now - v.receivedAt <= 30000 && now >= v.receivedAt));
+    }, 2000);
     const tick = async () => {
       const r = await api.sensors().catch(() => null);
       if (stop) return;
       if (r?.ok) {
-        setLive(r.data);
-        setHistory((h) => [...h, r.data].slice(-15));
+        const sample = { ...r.data, receivedAt: Date.now() };
+        setLive(freshLive(sample));
+        setHistory(h => [...h.filter(v => sample.receivedAt - v.receivedAt <= 30000), sample].slice(-15));
       }
       timer = setTimeout(tick, 2000);
     };
     tick();
-    return () => { stop = true; clearTimeout(timer); };
+    return () => { stop = true; clearTimeout(timer); clearInterval(expire); };
   }, [on]);
   return [live, history];
 }

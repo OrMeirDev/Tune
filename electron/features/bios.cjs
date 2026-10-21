@@ -1,10 +1,11 @@
 // BIOS updates from the board or PC maker's official catalog.
 const fs = require('fs');
 const path = require('path');
-const { cmpVer } = require('../domain/versions.cjs');
+const { compareFirmware: cmpVer, asusFileMatches } = require('../domain/catalog-policy.cjs');
 const { downloadFile } = require('../infra/download.cjs');
 const { runPS } = require('../infra/powershell.cjs');
-const { BIOS_SOURCES, oemBios, searchPage } = require('../oem-bios.cjs');
+const { vendorFetch, boundedBody } = require('../infra/vendor-fetch.cjs');
+const { BIOS_SOURCES, oemBios, searchPage, sha256Or } = require('../oem-bios.cjs');
 
 // ASUS's support site lists every BIOS for a board through the same JSON its own pages load,
 // with a SHA-256 for each file. Other makers: a search for their official page.
@@ -15,14 +16,16 @@ async function biosCheck(board) {
     // Brand-name PCs (Lenovo, Dell, HP): the maker's update catalog; others: a search on their site.
     try {
       const oem = await oemBios(board);
-      return { ok: true, data: oem ? { ...base, ...oem, installedDate: date, supported: !!oem.latest?.url, flash: 'windows' } : base };
+      return { ok: true, data: oem ? { ...base, ...oem, installedDate: date, supported: !!oem.latest?.url && !!sha256Or(oem.latest?.sha256), flash: 'windows' } : base };
     } catch (e) {
       return { ok: true, data: { ...base, error: String(e.message || e) } };
     }
   }
   if (!model) return { ok: true, data: base };
   try {
-    const files = await asusBiosFiles(model);
+    const listed = await asusBiosFiles(model);
+    const files = listed.filter(f => asusFileMatches(model, f.Version, /^https?:/i.test(f.DownloadUrl?.Global || '') ? f.DownloadUrl.Global : ASUS_DOWNLOADS + (f.DownloadUrl?.Global || '')));
+    if (listed.length && !files.length) throw new Error('ASUS catalog packages did not match the exact board model and BIOS version');
     if (!files.length) return { ok: true, data: base };
     const newest = (list) => list.reduce((a, b) => (cmpVer(b.Version, a.Version) > 0 ? b : a));
     // Only stable releases are offered; a beta is mentioned, never recommended.
@@ -37,8 +40,9 @@ async function biosCheck(board) {
     return {
       ok: true,
       data: {
-        ...base, supported: !!f, maker: 'ASUS', site: 'asus.com', flash: 'ezflash',
+        ...base, supported: !!f && !!sha256Or(f.sha256), maker: 'ASUS', site: 'asus.com', flash: 'ezflash',
         newer: !!f && cmpVer(f.Version, version) > 0,
+        error: f && cmpVer(f.Version, version) == null ? 'The installed and offered BIOS versions cannot be compared reliably.' : f && !sha256Or(f.sha256) ? 'The catalog did not provide a valid SHA-256 for this BIOS.' : null,
         // Installed a beta that is newer than the latest stable release: up to date, and said so.
         onBeta: !!f && cmpVer(version, f.Version) > 0,
         beta: String(beta.IsRelease) === '0' && (!f || cmpVer(beta.Version, f.Version) > 0) && cmpVer(beta.Version, version) > 0 ? info(beta) : null,
@@ -67,9 +71,9 @@ async function asusBiosFiles(model) {
   const failures = [];
   for (const url of urls) {
     try {
-      const r = await fetch(url, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36', Accept: 'application/json' } });
+      const r = await vendorFetch(url, { signal: AbortSignal.timeout(20000), headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36', Accept: 'application/json' } });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const j = await r.json();
+      const j = JSON.parse((await boundedBody(r, 8 * 1024 * 1024)).toString('utf8'));
       if (!j || String(j.Status).toUpperCase() === 'FAIL' || j.Result == null) throw new Error(`ASUS answered ${j?.Status || 'nothing'}`);
       // the answer counts only if it has the expected shape: a list of groups, and the BIOS group's
       // files (if there is one) a list too; anything else is a broken answer, not "no BIOS files"
@@ -91,7 +95,7 @@ async function asusBiosFiles(model) {
 async function downloadBios(latest, dir, onProgress) {
   const u = new URL(latest.url);
   const src = BIOS_SOURCES.find((s) => s.host.test(u.hostname));
-  if (u.protocol !== 'https:' || !src || !latest.sha256) return { ok: false, error: 'not an official BIOS download' };
+  if (u.protocol !== 'https:' || !src || !sha256Or(latest.sha256)) return { ok: false, error: 'not an official BIOS download' };
   const r = await downloadFile(u.href, path.join(dir, path.basename(u.pathname)), { sha256: latest.sha256, onProgress });
   if (!r.ok || !src.signer) return r;
   const sig = await runPS(`$s = Get-AuthenticodeSignature -LiteralPath '${r.data.replace(/'/g, "''")}'; $result = @{ status = [string]$s.Status; signer = [string]$s.SignerCertificate.Subject }`);

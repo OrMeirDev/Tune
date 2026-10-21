@@ -7,15 +7,18 @@ const sys = require('./system.cjs');
 const { pathToFileURL } = require('url');
 const { hardwareReport } = require('./report.cjs');
 const { createMeasureStore } = require('./measure-store.cjs');
+const { createOperationStore } = require('./infra/operation-store.cjs');
 const { createLicensing } = require('./licensing/index.cjs');
 const { createChannels, CACHE_KEYS } = require('./ipc/channels.cjs');
 const { createOffers } = require('./ipc/offers.cjs');
 const { isTrustedSender, dispatch, pageOf } = require('./ipc/guard.cjs');
 
+sys.setOperationStore(createOperationStore({ file: path.join(app.getPath('userData'), 'operations.json') }));
+
 // ---------- history of everything Tune changed ----------
 
 const historyFile = () => path.join(app.getPath('userData'), 'history.json');
-const readHistory = () => { try { return JSON.parse(fs.readFileSync(historyFile(), 'utf8')); } catch { return []; } };
+const readHistory = () => { try { const h = JSON.parse(fs.readFileSync(historyFile(), 'utf8')); return Array.isArray(h) ? h : []; } catch { return []; } };
 // Each entry gets an ID, so measurements taken around a change can point at it (measure-store.cjs).
 function addHistory(action, detail) {
   const id = crypto.randomUUID();
@@ -146,7 +149,7 @@ const channels = createChannels({
     install: () => autoUpdater.quitAndInstall(true, true),
   },
   cache: { read: readCache, write: writeCache },
-  history: { add: addHistory, read: readHistory },
+  history: { add: addHistory, read: readHistory, view: () => { const h = readHistory(); return [...h, ...sys.operationHistoryView(h)]; } },
   licensing: {
     status: () => licensing().client.status(),
     startOwner: (email) => licensing().client.startOwner(email),

@@ -8,8 +8,8 @@
 # A version with a pre-release part (1.4.0-beta.1) becomes a GitHub pre-release: installed copies of
 # a regular release keep updating from the latest regular release (electron-updater skips
 # pre-releases), so only people who download it get it.
-# Unsigned until there is a code-signing certificate (audit TUN-09, decision 9 in
-# docs/roadmap/decisions-he.md); then CSC_LINK and CSC_KEY_PASSWORD come from the repository's secrets.
+# Publication requires full green CI for this exact commit. The owner explicitly approved
+# unsigned 1.4.1; all other versions still require the production certificate.
 name: Release
 
 on:
@@ -19,6 +19,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -28,7 +29,7 @@ jobs:
   release:
     if: ${{ startsWith(github.ref, 'refs/tags/v') || contains(github.event.head_commit.message, '[release v') }}
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 50
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     steps:
@@ -54,9 +55,52 @@ jobs:
           $global:LASTEXITCODE = 0  # "not found" is what was wanted; the step must not end with it
           "VERSION=$v" >> $env:GITHUB_ENV
           "TAG=$tag" >> $env:GITHUB_ENV
+      - name: full Windows CI passed for this exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/ci/release-gate.cjs
+      - run: npm audit --audit-level=moderate
       - run: npm test
-      - name: build (unsigned)
+      - name: select approved signing mode and prepare the certificate
+        shell: pwsh
+        env:
+          CERTIFICATE: ${{ secrets.CSC_LINK }}
+          CERT_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          # Owner instruction: publish 1.4.1 unsigned. This exception does not cover later versions.
+          if ($env:VERSION -eq '1.4.1') {
+            'SIGNING_MODE=unsigned' >> $env:GITHUB_ENV
+            Write-Host 'Tune 1.4.1: unsigned publication explicitly approved by the owner.'
+            exit 0
+          }
+          'SIGNING_MODE=signed' >> $env:GITHUB_ENV
+          if (-not $env:CERTIFICATE -or -not $env:CERT_PASSWORD) { throw 'Production signing is not configured. Configure CSC_LINK (base64 PFX) and CSC_KEY_PASSWORD before publishing. Test builds remain available from CI.' }
+          $pfx = Join-Path $env:RUNNER_TEMP 'tune-production-signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE))
+          $c = New-Object Security.Cryptography.X509Certificates.X509Certificate2($pfx, $env:CERT_PASSWORD)
+          if (-not $c.HasPrivateKey -or $c.NotAfter -le (Get-Date) -or $c.Subject -eq $c.Issuer) { throw 'A current production certificate with its private key is required; self-signed test certificates cannot publish.' }
+          $publisher = $c.GetNameInfo([Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+          "CSC_LINK=$pfx" >> $env:GITHUB_ENV
+          "CSC_KEY_PASSWORD=$env:CERT_PASSWORD" >> $env:GITHUB_ENV
+          "TUNE_CI_SIGNER=$($c.Thumbprint)" >> $env:GITHUB_ENV
+          "SIGNING_PUBLISHER=$publisher" >> $env:GITHUB_ENV
+          'TUNE_SIGN_TIMESTAMP_URL=http://timestamp.digicert.com' >> $env:GITHUB_ENV
+      - name: build with the production certificate
+        if: ${{ env.SIGNING_MODE == 'signed' }}
+        shell: pwsh
+        run: npm run dist -- --publish never "-c.win.publisherName=$env:SIGNING_PUBLISHER"
+      - name: build the owner-approved unsigned version
+        if: ${{ env.SIGNING_MODE == 'unsigned' }}
         run: npm run dist -- --publish never
+      - name: verify the unsigned installer, application and service
+        if: ${{ env.SIGNING_MODE == 'unsigned' }}
+        shell: pwsh
+        run: |
+          $paths = @('release/win-unpacked/Tune.exe', 'release/win-unpacked/resources/service/TuneService.exe', "release/Tune-Setup-$env:VERSION.exe")
+          foreach ($path in $paths) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $path
+            if ($signature.Status -ne 'NotSigned') { throw "$path must be unsigned for this approved release; got $($signature.Status)" }
+          }
       - name: packed contents; development licensing overrides ignored
         run: node scripts/ci/packaged-check.cjs
       - name: publish
@@ -66,8 +110,15 @@ jobs:
         run: |
           $files = @(Get-ChildItem release -File | Where-Object { $_.Name -match '^Tune-Setup-.*\.exe(\.blockmap)?$' -or $_.Name -match '^(latest|beta|alpha)\.yml$' } | ForEach-Object FullName)
           if (-not ($files | Where-Object { $_ -match '\.exe$' })) { throw 'no installer in release/' }
+          $checksums = @($files | ForEach-Object { $hash = Get-FileHash -LiteralPath $_ -Algorithm SHA256; "$($hash.Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($_))" })
+          $checksums | Set-Content -Encoding ascii release/SHA256SUMS.txt
+          $files += (Resolve-Path release/SHA256SUMS.txt).Path
           $kind = if ($env:VERSION -match '-') { '--prerelease' } else { '--latest' }
           # a pushed tag is used as it is; otherwise the tag is made at this commit
           $where = if ($env:GITHUB_REF -like 'refs/tags/*') { '--verify-tag' } else { "--target=$env:GITHUB_SHA" }
           gh release create $env:TAG --repo $env:GITHUB_REPOSITORY $where --title "$env:VERSION" --notes-file "docs/release-notes/v$env:VERSION.md" $kind @files
           if ($LASTEXITCODE) { throw "gh release create exited $LASTEXITCODE" }
+      - name: remove the temporary signing file
+        if: ${{ always() }}
+        shell: pwsh
+        run: Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'tune-production-signing.pfx') -Force -ErrorAction SilentlyContinue

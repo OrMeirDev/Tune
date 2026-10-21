@@ -5,6 +5,7 @@
 // half-written file behind. Disk errors (full disk, no access) come back as an error, not a crash.
 const crypto = require('crypto');
 const fs = require('fs');
+const { vendorFetch } = require('./vendor-fetch.cjs');
 
 const LIMITS = { deadlineMs: 60 * 60 * 1000, stallMs: 90 * 1000, maxBytes: 4 * 1024 ** 3 };
 
@@ -18,7 +19,7 @@ async function downloadFile(url, file, { headers = {}, sha256, onProgress, limit
   let stall = setTimeout(() => stop('download stalled'), stallMs);
   let out = null;
   try {
-    const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', ...headers }, signal: abort.signal });
+    const res = await vendorFetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', ...headers }, signal: abort.signal });
     if (!res.ok || !res.body) return { ok: false, error: `HTTP ${res.status}` };
     // the address the download finally came from, after redirects
     if (new URL(res.url || url).protocol !== 'https:') return { ok: false, error: 'redirected to an insecure address' };

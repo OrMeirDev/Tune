@@ -5,6 +5,7 @@ import {
   Loader2, Monitor, ScanSearch, ShieldCheck,
 } from 'lucide-react';
 import { api } from '../../api.js';
+import { DetailsDisclosure } from '../../components/DetailsDisclosure.jsx';
 import { ScanIncomplete } from '../../components/ScanIncomplete.jsx';
 import { AllGood } from '../../components/ScanSuccess.jsx';
 import { ProgressPill } from '../../components/TaskProgress.jsx';
@@ -25,7 +26,8 @@ export function UpdatesPage({ hw, wu, gpu, bios, sources, scan, soundKey, onScan
     const h = (u.hwid || '').toUpperCase();
     return devByHwid.get(h) || (hw?.devices || []).find((d) => d.hwid && (d.hwid.toUpperCase().startsWith(h) || h.startsWith(d.hwid.toUpperCase())));
   };
-  const gpuNewer = (gpu || []).filter((g) => g.newer && g.url);
+  const gpuNewer = (gpu || []).filter((g) => g.newer && g.url && g.installerKind !== 'autodetect');
+  const autoDetect = (gpu || []).filter(g => g.installerKind === 'autodetect' && g.url);
   const biosNewer = bios?.supported && bios.newer && bios.latest?.url ? bios : null;
   const problems = hw?.problems || [];
   const total = (wu?.length || 0) + gpuNewer.length + (biosNewer ? 1 : 0);
@@ -37,7 +39,9 @@ export function UpdatesPage({ hw, wu, gpu, bios, sources, scan, soundKey, onScan
       <header className="page-header">
         <div>
           <h1>{t('up.title')}</h1>
-          <p className="subtitle">{hw ? `${hw.board} · ${hw.cpu.replace(/\(R\)|\(TM\)/g, '')} · ${hw.gpus.map((g) => g.name).join(', ')}` : t('up.scanningPc')}</p>
+          {hw ? <DetailsDisclosure label={t('ui.computerDetails')}>
+            <p>{hw.board} · {hw.cpu.replace(/\(R\)|\(TM\)/g, '')} · {hw.gpus.map((g) => g.name).join(', ')}</p>
+          </DetailsDisclosure> : <p className="subtitle">{t('up.scanningPc')}</p>}
           <div className="scan-line">
             {loading ? (<>
               <span className="progress"><div style={{ width: `${Math.round((scan.step / scan.total) * 100)}%` }} /></span>
@@ -83,7 +87,9 @@ export function UpdatesPage({ hw, wu, gpu, bios, sources, scan, soundKey, onScan
               <span className="dicon"><Icon size={17} /></span>
               <div style={{ minWidth: 0 }}>
                 <div className="dname"><bdi>{dev?.name || u.model || u.title}</bdi><span className="src">{t('up.signed')}</span></div>
-                <div className="dmeta">{dev ? `${dev.version} ${t('arrow')} ` : ''}<b>{titleVersion(u.title) || u.date}</b> · {u.maker} · {fmtGB(u.size)}</div>
+                <DetailsDisclosure label={t('ui.driverDetails')} context={dev?.name || u.model || u.title}>
+                  <p>{dev ? `${dev.version} ${t('arrow')} ` : ''}<b>{titleVersion(u.title) || u.date}</b> · {u.maker} · {fmtGB(u.size)}</p>
+                </DetailsDisclosure>
               </div>
               <div className="acts">
                 {busy === u.id || busy === 'all' ? <ProgressPill p={busy === 'all' ? null : prog[busy]} fallback={t(busy === 'all' ? 'prog.updating' : 'prog.installing')} />
@@ -97,7 +103,9 @@ export function UpdatesPage({ hw, wu, gpu, bios, sources, scan, soundKey, onScan
             <span className="dicon"><Monitor size={17} /></span>
             <div style={{ minWidth: 0 }}>
               <div className="dname"><bdi>{g.gpu}</bdi><span className="src">{g.vendor.toLowerCase()}.com · {t('official')}</span></div>
-              <div className="dmeta">{g.package ? t('up.installedPkg', { pkg: `${g.vendor === 'AMD' ? 'AMD Software ' : ''}${g.package}` }) : t('up.installedDrv', { v: g.installed })} · {t('up.latestOnSite')} <b>{g.title || g.latest}</b>{g.size ? <> · {ltr(g.size)}</> : null}</div>
+              <DetailsDisclosure label={t('ui.driverDetails')} context={g.gpu}>
+                <p>{g.package ? t('up.installedPkg', { pkg: `${g.vendor === 'AMD' ? 'AMD Software ' : ''}${g.package}` }) : t('up.installedDrv', { v: g.installed })} · {t('up.latestOnSite')} <b>{g.title || g.latest}</b>{g.size ? <> · {ltr(g.size)}</> : null}</p>
+              </DetailsDisclosure>
             </div>
             <div className="acts">
               {busy === g.gpu ? <ProgressPill p={prog[g.gpu]} fallback={t('prog.downloading')} />
@@ -105,6 +113,11 @@ export function UpdatesPage({ hw, wu, gpu, bios, sources, scan, soundKey, onScan
             </div>
           </div>
         ))}
+        {autoDetect.map(g => <div key={g.gpu} className="drow">
+          <span className="dicon"><Monitor size={17} /></span>
+          <div style={{ minWidth: 0 }}><div className="dname"><bdi>{g.gpu}</bdi></div><div className="dmeta" style={{ whiteSpace: 'normal' }}>{t('up.amdAutoDetect')}</div></div>
+          <div className="acts"><button className="btn-ghost" onClick={() => onGpu(g)} disabled={!!busy}><Download size={14} /> {t('up.amdOpen')}</button></div>
+        </div>)}
         {(gpu || []).filter((g) => g.vendor === 'Intel').map((g) => (
           <div key={g.gpu} className="drow">
             <span className="dicon"><Monitor size={17} /></span>

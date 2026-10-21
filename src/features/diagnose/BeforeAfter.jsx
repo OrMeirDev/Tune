@@ -2,6 +2,7 @@
 // measurement on request. A result is credited only when both sides were measured the same way;
 // otherwise both values are shown and nothing is claimed.
 import { Download, Gauge, Info, TrendingDown, TrendingUp, Minus } from 'lucide-react';
+import { DetailsDisclosure } from '../../components/DetailsDisclosure.jsx';
 import { ProgressPill } from '../../components/TaskProgress.jsx';
 import { useT } from '../../i18n.js';
 import { fmtDate } from '../../presentation/format.jsx';
@@ -79,7 +80,7 @@ export function BeforeAfter({ view, onMeasure, onExport, busy, prog, scanning })
         </span>
       </div>
       <div className="ba-body">
-        <div className="dmeta ba-intro">{t('ba.intro')}</div>
+        <DetailsDisclosure label={t('ui.aboutMeasurements')}><p>{t('ba.intro')}</p></DetailsDisclosure>
         {view && <Latest latest={view.latest || {}} />}
         {view && !changes.length && <div className="dmeta">{t('ba.noChanges')}</div>}
         {changes.map((c, i) => (

@@ -8,7 +8,7 @@ export const recTitle = (r, t) => t(`rec.${r.key}.title`);
 
 const planName = (r, t) => (['balanced', 'high', 'ultimate', 'saver'].includes(r.plan) ? t(`plan.${r.plan}`) : r.value);
 
-export const recValue = (r, t) => ({
+export const recValue = (r, t) => r.unchecked ? t('rec.unchecked') : ({
   // Off the recommended plan, say which one is recommended right next to the current one.
   power: planName(r, t) + (r.ok === false ? ` · ${t('rec.power.recommended', { plan: t('plan.balanced') })}` : ''),
   gamemode: t(r.on ? 'on' : 'off'),
@@ -26,7 +26,7 @@ export const recValue = (r, t) => ({
 }[r.key] ?? '');
 
 // A short "why" for every recommendation...
-export const recNote = (r, t) => (r.key === 'bios' ? t(r.intel1314 ? 'rec.bios.note1314' : 'rec.bios.note')
+export const recNote = (r, t) => r.unchecked ? t('rec.uncheckedNote') : (r.key === 'bios' ? t(r.intel1314 ? 'rec.bios.note1314' : 'rec.bios.note')
   : r.key === 'power' ? t(`rec.power.why.${r.cpuKind || 'other'}`)
     : r.key === 'powerLimit' ? t(r.cpuKind === 'intelHybrid' ? 'rec.powerLimit.noteIntel' : 'rec.powerLimit.noteAmd')
       : r.key === 'memSpeed' ? t('rec.memSpeed.note', { profile: r.profile })
