@@ -1,5 +1,6 @@
 // The live CPU tiles.
 import { Activity, Gauge, Info, Loader2, Thermometer, Zap } from 'lucide-react';
+import { DetailsDisclosure } from '../../components/DetailsDisclosure.jsx';
 import { useT } from '../../i18n.js';
 import { ltr, tempClass } from '../../presentation/format.jsx';
 
@@ -17,16 +18,22 @@ export function LiveCpu({ live, service, onInstallService, busy, extra = [] }) {
   const noService = live && v.cpuNote === 'no service';
   const outdated = service?.running && !service.current;
   const hint = noService ? t('lv.noService') : outdated ? t('lv.outdated') : ['stale', 'unverified'].includes(v.cpuNote) ? t(`lv.${v.cpuNote}`) : null;
+  const tile = (x) => (
+    <div key={x.key} className="stat" title={x.title || ''}>
+      <span><x.icon size={13} /> {x.label}</span>
+      {x.value != null ? <b className={x.cls || ''}>{ltr(x.value)}</b> : <b className="na">{live ? '—' : <Loader2 size={15} className="spin" />}</b>}
+    </div>
+  );
   return (
     <>
-      <div className={`stats live n${tiles.length + extra.length}`}>
-        {tiles.map((x) => (
-          <div key={x.key} className="stat" title={x.title || ''}>
-            <span><x.icon size={13} /> {x.label}</span>
-            {x.value != null ? <b className={x.cls || ''}>{ltr(x.value)}</b> : <b className="na">{live ? '—' : <Loader2 size={15} className="spin" />}</b>}
-          </div>
-        ))}
-        {extra}
+      <div className="live-summary">
+        <div className={`stats live n${1 + extra.length}`}>
+          {tile(tiles[0])}
+          {extra}
+        </div>
+        <DetailsDisclosure label={t('ui.sensorDetails')} className="sensor-details">
+          <div className="stats live n3">{tiles.slice(1).map(tile)}</div>
+        </DetailsDisclosure>
       </div>
       {hint && (
         <div className="finding warn live-hint">

@@ -1,5 +1,6 @@
 // Settings.
 import { FolderOpen, Globe, RefreshCw, ShieldCheck } from 'lucide-react';
+import { DetailsDisclosure } from '../../components/DetailsDisclosure.jsx';
 import { playChime } from '../../components/ScanSuccess.jsx';
 import { ProgressPill } from '../../components/TaskProgress.jsx';
 import { useT } from '../../i18n.js';
@@ -16,8 +17,9 @@ export function SettingsPage({ version, status, onCheck, settings, onPickDir, on
     <>
       <header className="page-header"><div><h1>{t('se.title')}</h1></div></header>
       <section className="card settings">
+        <h2 className="settings-group-title">{t('ui.appearance')}</h2>
         <div className="setting">
-          <div><div className="setting-title"><Globe size={15} style={{ verticalAlign: -2 }} /> {t('se.language')}</div><div className="row-meta">{t('se.languageNote')}</div></div>
+          <div><div className="setting-title"><Globe size={15} style={{ verticalAlign: -2 }} /> {t('se.language')}</div><DetailsDisclosure context={t('se.language')}><p>{t('se.languageNote')}</p></DetailsDisclosure></div>
           {/* Each language is named in itself, so it can be found from either one. */}
           <div className="segmented">
             <button className={t.lang === 'en' ? 'on' : ''} onClick={() => onLang('en')}>English</button>
@@ -25,24 +27,26 @@ export function SettingsPage({ version, status, onCheck, settings, onPickDir, on
           </div>
         </div>
         <div className="setting">
-          <div><div className="setting-title">{t('se.sound')}</div><div className="row-meta">{t('se.soundNote')}</div></div>
+          <div><div className="setting-title">{t('se.sound')}</div><DetailsDisclosure context={t('se.sound')}><p>{t('se.soundNote')}</p></DetailsDisclosure></div>
           <div className="acts">
             <button className="btn-ghost" onClick={playChime}>{t('se.soundTry')}</button>
             <button className={`toggle ${settings?.sound !== false ? 'on' : ''}`} role="switch" aria-checked={settings?.sound !== false} aria-label={t('se.sound')} onClick={() => onSound(settings?.sound === false)} />
           </div>
         </div>
+        <h2 className="settings-group-title">{t('ui.application')}</h2>
         <div className="setting">
           <div><div className="setting-title">{t('se.updates')}</div><div className="row-meta">{t('se.versionLine', { v: version || '…', msg })}</div></div>
           <button className="btn-ghost" onClick={onCheck}><RefreshCw size={14} /> {t('se.check')}</button>
         </div>
         <div className="setting">
-          <div><div className="setting-title">{t('se.saveDir')}</div><div className="row-meta path-text" dir="ltr">{settings?.saveDir || '…'}</div><div className="row-meta">{t('se.saveDirNote')}</div></div>
+          <div><div className="setting-title">{t('se.saveDir')}</div><div className="row-meta path-text" dir="ltr">{settings?.saveDir || '…'}</div><DetailsDisclosure context={t('se.saveDir')}><p>{t('se.saveDirNote')}</p></DetailsDisclosure></div>
           <button className="btn-ghost" onClick={onPickDir}><FolderOpen size={14} /> {t('se.change')}</button>
         </div>
+        <h2 className="settings-group-title">{t('ui.system')}</h2>
         <div className="setting">
           <div>
             <div className="setting-title">{t('se.service', { status: svcText })}</div>
-            <div className="row-meta">{t('se.serviceNote')}</div>
+            <DetailsDisclosure context={t('ui.system')}><p>{t('se.serviceNote')}</p></DetailsDisclosure>
             {!service?.running && <div className="row-meta">{t('se.noService')}</div>}
             {/* until the main process has seen this version answer (WIN-R03) */}
             {service?.needsUpdate && (
@@ -65,12 +69,14 @@ export function SettingsPage({ version, status, onCheck, settings, onPickDir, on
             </>)}
           </div>
         </div>
+        <h2 className="settings-group-title">{t('lic.title')}</h2>
         <LicenseSection />
+        <h2 className="settings-group-title">{t('ui.about')}</h2>
         <div className="setting">
-          <div><div className="setting-title">{t('se.sources')}</div><div className="row-meta">{t('se.sourcesNote')}</div></div>
+          <DetailsDisclosure label={t('se.sources')}><p>{t('se.sourcesNote')}</p></DetailsDisclosure>
         </div>
         <div className="setting">
-          <div><div className="setting-title">{t('se.safety')}</div><div className="row-meta">{t('se.safetyNote')}</div></div>
+          <DetailsDisclosure label={t('se.safety')}><p>{t('se.safetyNote')}</p></DetailsDisclosure>
         </div>
       </section>
     </>

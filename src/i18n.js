@@ -3,6 +3,20 @@ import { createContext, useContext } from 'react';
 // Every string in Tune, in English (the default on first launch) and Hebrew.
 // t('key', { n: 3 }) fills {n}. **bold** inside a string is rendered bold by rich() in App.jsx.
 const en = {
+  'ui.navigation': 'Tune navigation',
+  'ui.details': 'Details',
+  'ui.driverDetails': 'Driver details',
+  'ui.computerDetails': 'Computer details',
+  'ui.recommendationDetails': 'Why this matters',
+  'ui.sensorDetails': 'Power, voltage & clock',
+  'ui.aboutMeasurements': 'About these measurements',
+  'ui.checkLimits': 'What this check covers',
+  'ui.appearance': 'Language & sound',
+  'ui.application': 'Application',
+  'ui.system': 'Background service',
+  'ui.about': 'Sources & safety',
+  'ui.reviewCount': '{n} to review',
+  'ui.restartNote': 'This change needs a restart.',
   arrow: '→',
   close: 'Close',
   on: 'On',
@@ -150,8 +164,8 @@ const en = {
   'hw.count': "{n} components with a maker's driver (Windows' built-in drivers show up when you search)",
   'hw.other': 'Other',
 
-  'ov.title': 'PC optimization',
-  'ov.subtitle': 'First see what was found. Nothing changes without your approval, and every change can be undone.',
+  'ov.title': 'Overview',
+  'ov.subtitle': 'A clear view of your PC. Choose where to start.',
   'ov.clean': 'File cleanup',
   'ov.toClean': 'Clean up',
   'ov.startup': 'Start with Windows',
@@ -266,7 +280,7 @@ const en = {
   'rc.applyPlan': 'Switch to Balanced',
 
   'cc.title': 'Performance center',
-  'cc.subtitle': 'Everything that makes the PC run better, part by part. What Tune can do itself is one click; what is done in the BIOS or inside the PC comes with a short guide.',
+  'cc.subtitle': 'Checks and recommendations, grouped by component.',
   'cc.okCount': 'OK',
   'cc.scoreTitle': 'How many checks are OK (tips are not counted)',
   'cc.tip': 'Tip',
@@ -367,7 +381,7 @@ const en = {
   'g2.powerLimitAmd.warn': 'ECO Mode is safe and defined by AMD. You can turn it off at any time.',
 
   'hs.title': 'History & restore',
-  'hs.subtitle': 'Everything Tune changed. Something not working? Go back to a restore point.',
+  'hs.subtitle': 'Actions, results and restore points.',
   'hs.createRp': 'Create restore point',
   'hs.restoreRp': 'Go back to a restore point',
   'hs.empty': 'No changes yet.',
@@ -497,7 +511,7 @@ const en = {
   // ---- fix a problem (diagnosis by problem) ----
   'nav.diagnose': 'Fix a problem',
   'dx.title': 'Fix a problem',
-  'dx.subtitle': 'Pick what bothers you. Tune runs the checks that fit, shows what it found and how sure it is, and you decide what to do.',
+  'dx.subtitle': 'Choose a problem to see the relevant checks.',
   'dx.pick': 'What is the problem?',
   'dx.pickFirst': 'Pick a problem above to start.',
   'dx.p.slowBoot': 'Windows starts slowly',
@@ -760,6 +774,20 @@ const en = {
 };
 
 const he = {
+  'ui.navigation': 'ניווט Tune',
+  'ui.details': 'פרטים',
+  'ui.driverDetails': 'פרטי הדרייבר',
+  'ui.computerDetails': 'פרטי המחשב',
+  'ui.recommendationDetails': 'למה זה חשוב',
+  'ui.sensorDetails': 'הספק, מתח ותדר',
+  'ui.aboutMeasurements': 'על המדידות',
+  'ui.checkLimits': 'מה הבדיקה מכסה',
+  'ui.appearance': 'שפה וצליל',
+  'ui.application': 'האפליקציה',
+  'ui.system': 'שירות הרקע',
+  'ui.about': 'מקורות ובטיחות',
+  'ui.reviewCount': '{n} לבדיקה',
+  'ui.restartNote': 'השינוי דורש הפעלה מחדש.',
   arrow: '←',
   close: 'סגור',
   on: 'פועל',
@@ -907,8 +935,8 @@ const he = {
   'hw.count': '{n} רכיבים עם דרייבר של יצרן (דרייברים מובנים של Windows מוצגים בחיפוש)',
   'hw.other': 'אחר',
 
-  'ov.title': 'מיטוב המחשב',
-  'ov.subtitle': 'קודם רואים מה נמצא. שום דבר לא משתנה בלי אישור שלך, ולכל שינוי יש ביטול.',
+  'ov.title': 'סקירה',
+  'ov.subtitle': 'תמונת מצב ברורה של המחשב. בוחרים מאיפה להתחיל.',
   'ov.clean': 'ניקוי קבצים',
   'ov.toClean': 'לניקוי',
   'ov.startup': 'עולות עם Windows',
@@ -1023,7 +1051,7 @@ const he = {
   'rc.applyPlan': 'עבור ל-Balanced',
 
   'cc.title': 'מרכז ביצועים',
-  'cc.subtitle': 'כל מה שגורם למחשב לרוץ טוב יותר, לפי רכיבים. מה ש-Tune יכול לעשות בעצמו – בלחיצה; מה שעושים ב-BIOS או בתוך המחשב – עם מדריך קצר.',
+  'cc.subtitle': 'בדיקות והמלצות, לפי רכיבי המחשב.',
   'cc.okCount': 'תקין',
   'cc.scoreTitle': 'כמה מהבדיקות תקינות (טיפים לא נספרים)',
   'cc.tip': 'טיפ',
@@ -1124,7 +1152,7 @@ const he = {
   'g2.powerLimitAmd.warn': 'ECO Mode בטוח ומוגדר על ידי AMD. אפשר לכבות אותו בכל רגע.',
 
   'hs.title': 'היסטוריה ושחזור',
-  'hs.subtitle': 'כל מה ש-Tune שינה. משהו לא עובד? חוזרים לנקודת שחזור.',
+  'hs.subtitle': 'פעולות שבוצעו, תוצאות ונקודות שחזור.',
   'hs.createRp': 'צור נקודת שחזור',
   'hs.restoreRp': 'חזור לנקודת שחזור',
   'hs.empty': 'עוד לא בוצעו שינויים.',
@@ -1254,7 +1282,7 @@ const he = {
   // ---- פתרון בעיה (אבחון לפי בעיה) ----
   'nav.diagnose': 'פתרון בעיה',
   'dx.title': 'פתרון בעיה',
-  'dx.subtitle': 'בחר מה מפריע לך. Tune מריץ את הבדיקות המתאימות, מראה מה נמצא ועד כמה זה ודאי, ואתה מחליט מה לעשות.',
+  'dx.subtitle': 'בוחרים בעיה ורואים את הבדיקות המתאימות.',
   'dx.pick': 'מה הבעיה?',
   'dx.pickFirst': 'בחר בעיה למעלה כדי להתחיל.',
   'dx.p.slowBoot': 'Windows עולה לאט',

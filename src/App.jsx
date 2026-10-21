@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { ChevronLeft, ChevronRight, Home, Loader2 } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 // The Tune name with its symbol on the right (vector, from the brand package).
 import brandLockup from './assets/brand/logo-lockup.svg';
 import { api } from './api.js';
-import { NAV_GROUPS, PAGES } from './app/routes.js';
+import { NAV_GROUPS } from './app/routes.js';
 import { useCommands } from './app/useCommands.js';
 import { useOperations } from './app/useOperations.js';
 import { useScanResults } from './app/useScanResults.js';
@@ -84,7 +84,6 @@ export default function App() {
   }, [fullScan, loadService, showCached]);
 
   const updatesCount = (wu?.length || 0) + (gpu || []).filter((g) => g.newer && g.url).length + (bios?.supported && bios.newer ? 1 : 0);
-  const Crumb = t.lang === 'he' ? ChevronLeft : ChevronRight;
   // A message stored as a key (from the scan) is translated when shown.
   const shownMsg = msg && msg.key ? { ...msg, text: t(msg.key, msg.vars) } : msg;
 
@@ -93,13 +92,13 @@ export default function App() {
       <div className="app">
         <aside className="sidebar">
           <div className="brand"><img className="brand-lockup" src={brandLockup} alt="Tune" draggable={false} /></div>
-          <nav>
+          <nav aria-label={t('ui.navigation')}>
             {NAV_GROUPS.map((g, i) => (
               <React.Fragment key={i}>
                 {g.group && <div className="nav-group">{t(g.group)}</div>}
                 <div className="nav-panel">
                   {g.pages.map((p) => (
-                    <button key={p.id} className={`nav-item ${page === p.id ? 'active' : ''}`} onClick={() => setPage(p.id)}>
+                    <button key={p.id} data-page-id={p.id} aria-current={page === p.id ? 'page' : undefined} className={`nav-item ${page === p.id ? 'active' : ''}`} onClick={() => setPage(p.id)}>
                       <span>{t(p.key)}</span>
                       {p.id === 'updates' && updatesCount > 0 && <span className="nav-badge">{updatesCount}</span>}
                       <p.icon size={18} />
@@ -115,9 +114,8 @@ export default function App() {
             <div className="muted">{t('version', { v: version || '…' })}</div>
           </div>
         </aside>
-        <main className="main">
-          <div className="breadcrumbs"><Home size={15} /> <Crumb size={13} /> <span>{t(PAGES.find((p) => p.id === page)?.key || '')}</span>
-            {(STALE_KEYS[page] || []).some(stale) && <span className="stale-chip"><Loader2 size={12} className="spin" /> {t('stale.updating')}</span>}</div>
+        <main className="main" data-page={page}>
+          {(STALE_KEYS[page] || []).some(stale) && <div className="page-context"><span className="stale-chip"><Loader2 size={12} className="spin" /> {t('stale.updating')}</span></div>}
           <UpdateBanner status={appUpdate} />
           <Banner msg={shownMsg} onClose={() => setMsg(null)} />
           {page === 'updates' && <UpdatesPage hw={hw} wu={wu} gpu={gpu} bios={bios} sources={sources} scan={scan} soundKey={settings?.sound !== false && fresh.wu && !scan.running ? scan.at : null} busy={lockWhile(scan.running)} onScan={fullScan} onInstall={installDrivers} onGpu={gpuInstall} onBiosDownload={biosDownload} onGuide={() => setGuide(true)} onEnable={enable} prog={prog} />}

@@ -23,6 +23,9 @@ const out = OUT_DIR;
 app.setPath('userData', fs.mkdtempSync(path.join(require('os').tmpdir(), 'e2e-')));
 app.on('window-all-closed', () => {});
 const sys = require(path.join(tune, 'electron', 'system.cjs'));
+// The celebration needs a completed hardware check. Keep that input deterministic off Windows,
+// just as the driver/vendor checks below; a host without PowerShell must not decide this UI test.
+sys.scanHardware = async () => ({ ok: true, data: { ...require('./ui-samples.cjs').hardware, gpus: [], devices: [], problems: [] } });
 sys.driverUpdates = async () => ({ ok: true, data: [] });
 sys.biosCheck = async () => ({ ok: true, data: { supported: true, newer: false, maker: 'ASUS', model: 'PRIME Z790-P WIFI' } });
 sys.gpuVendorCheck = async () => ({ ok: true, data: [] });

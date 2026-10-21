@@ -39,8 +39,12 @@ const HARDWARE = { ok: true, data: {
   gpus: [{ name: 'NVIDIA GeForce RTX 4070', driverVersion: '32.0.15.6094', pnp: 'PCI\\VEN_10DE&DEV_2786' }], devices: [], problems: [],
 } };
 sys.scanHardware = async () => HARDWARE;
-const realJunk = sys.junkScan;
-const realStartup = sys.startupList;
+// These healthy inputs are not what this test varies. Use the same synthetic PC on every host,
+// including hosts without PowerShell, so the three failure states below are actually exercised.
+const sample = require('./ui-samples.cjs');
+const realJunk = async () => ({ ok: true, data: sample.junk });
+const realStartup = async () => ({ ok: true, data: sample.startup });
+sys.recommendations = async () => ({ ok: true, data: sample.recommendations });
 sys.driverUpdates = async () => (mode === 1 ? { ok: false, error: 'Windows Update service did not answer' } : { ok: true, data: [] });
 // the real failure shape: the adapter answers, and the card carries the error (R1)
 sys.gpuVendorCheck = async (gpus) => ({ ok: true, data: (gpus || []).map((g) => (mode === 3 ? { status: 'error', gpu: g.name, vendor: 'NVIDIA', error: 'catalog unavailable' } : { status: 'ok', gpu: g.name, vendor: 'AMD', newer: false })) });

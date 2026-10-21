@@ -8,7 +8,7 @@
 :root {
   --bg: #f4f8fe;
   --card: rgba(255, 255, 255, .78);
-  --border: rgba(119, 160, 217, .25);
+  --border: rgba(119, 160, 217, .18);
   --text: #132039;
   --muted: #56657c;
   --accent-soft: rgba(var(--accent-rgb), .10);
@@ -16,8 +16,8 @@
   --glass: rgba(255, 255, 255, .78);
   --glass-strong: rgba(255, 255, 255, .9);
   --edge: rgba(255, 255, 255, .96);
-  --shadow-panel: 0 10px 30px rgba(42, 84, 140, .08);
-  --shadow-control: 0 3px 10px rgba(42, 84, 140, .06);
+  --shadow-panel: 0 8px 28px rgba(42, 84, 140, .045);
+  --shadow-control: 0 2px 8px rgba(42, 84, 140, .04);
   --font-ui: 'Segoe UI Variable Text', 'Segoe UI Variable', 'Segoe UI', Arial, sans-serif;
   --font-display: 'Segoe UI Variable Display', 'Segoe UI Variable', 'Segoe UI', Arial, sans-serif;
   --ease: 160ms ease;
@@ -28,14 +28,15 @@ body {
   font-family: var(--font-ui);
   color: var(--text);
   background:
-    radial-gradient(900px 520px at 18% 12%, rgba(var(--accent-rgb), .07), transparent 60%),
-    radial-gradient(760px 520px at 78% 92%, rgba(var(--accent-rgb), .06), transparent 62%),
+    radial-gradient(900px 520px at 18% 12%, rgba(var(--accent-rgb), .04), transparent 60%),
+    radial-gradient(760px 520px at 78% 92%, rgba(var(--accent-rgb), .035), transparent 62%),
     linear-gradient(180deg, #f7faff 0%, #eef3fb 100%);
   background-attachment: fixed;
 }
 .main { background: transparent; }
-h1 { font-family: var(--font-display); font-weight: 650; letter-spacing: -.2px; color: var(--text); }
+h1 { font-family: var(--font-display); font-size: 34px; font-weight: 650; letter-spacing: 0; color: var(--text); }
 h2 { font-family: var(--font-display); font-weight: 650; color: var(--text); }
+.subtitle { font-size: 15.5px; }
 .subtitle, .muted, .row-meta, .dmeta, .item-meta { color: var(--muted); }
 
 /* ---- the glass surface every card, panel and list row uses ---- */
@@ -55,15 +56,16 @@ h2 { font-family: var(--font-display); font-weight: 650; color: var(--text); }
 
 /* ---- sidebar: frosted, the brand lockup on top, rounded navigation ---- */
 .sidebar {
+  width: 244px; padding: 24px 16px;
   background: rgba(255, 255, 255, .55);
   border-inline-start: 1px solid var(--border);
   box-shadow: inset 1px 0 0 var(--edge);
   backdrop-filter: blur(18px);
 }
-.brand { direction: ltr; justify-content: center; margin-bottom: 26px; }
-.brand-lockup { display: block; height: 42px; width: auto; max-width: 180px; user-select: none; -webkit-user-drag: none; }
+.brand { direction: ltr; justify-content: center; margin-bottom: 24px; flex-shrink: 0; }
+.brand-lockup { display: block; height: 46px; width: auto; max-width: 180px; user-select: none; -webkit-user-drag: none; }
 .nav-item {
-  min-height: 48px; border-radius: 18px; border: 1px solid transparent; color: #26334d;
+  min-height: 44px; padding: 11px 10px; gap: 8px; font-size: 16.5px; border-radius: 16px; border: 1px solid transparent; color: #26334d;
   transition: background var(--ease), border-color var(--ease), box-shadow var(--ease);
 }
 .nav-item svg { color: #3b4a66; }
@@ -159,17 +161,6 @@ textarea:focus, .unit-input:focus, .plain-select:focus { border-color: var(--acc
   .card, .panel, .ocard, .settings, .stat, .queue-item, .row, .file-row, .tool-card, .modal, .sidebar { background: #fbfdff; }
 }
 
-/* ---- proportions from the mockups ---- */
-.sidebar { width: 272px; padding: 26px 18px; }
-.brand { margin-bottom: 22px; }
-.brand-lockup { height: 52px; max-width: 210px; }
-nav { gap: 6px; }
-.nav-item { font-size: 16.5px; padding: 11px 16px; }
-.nav-item svg { width: 21px; height: 21px; }
-h1 { font-size: 34px; }
-.subtitle { font-size: 15.5px; }
-.breadcrumbs { font-size: 14px; }
-
 /* ---- empty states: the icon sits in a soft glass circle above the text ---- */
 .empty { gap: 12px; padding: 34px 24px; color: var(--muted); }
 .empty > svg:first-child {
@@ -215,20 +206,22 @@ h1 { font-size: 34px; }
 /* ---- narrow windows: a slimmer sidebar, and long list lines end with "…" instead of
         running into the buttons beside them ---- */
 @media (max-width: 1150px) {
-  .sidebar { width: 236px; padding: 22px 14px; }
-  .brand-lockup { height: 46px; }
+  .sidebar { width: 220px; padding: 22px 14px; }
+  .brand-lockup { height: 42px; }
   .nav-item { font-size: 15.5px; }
 }
 .row-info, .file-info, .item-info { min-width: 0; }
 .row-name, .row-meta, .file-name, .file-meta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ---- the navigation sits in one glass panel (Tune splits it into a panel per group) ---- */
-.sidebar > nav, .nav-panel {
-  padding: 6px; border-radius: 22px; gap: 4px;
-  background: rgba(255, 255, 255, .5); border: 1px solid var(--border);
-  box-shadow: inset 0 1px 0 var(--edge), 0 10px 26px rgba(40, 70, 120, .06);
+.sidebar > nav {
+  flex: 1; min-height: 0; overflow-y: auto; padding-block: 4px;
 }
-.sidebar > nav:has(.nav-panel) { padding: 0; background: none; border: 0; box-shadow: none; }
+.nav-panel {
+  padding: 6px; border-radius: 22px; gap: 4px;
+  background: rgba(255, 255, 255, .28); border: 1px solid rgba(119, 160, 217, .1);
+  box-shadow: inset 0 1px 0 var(--edge);
+}
 
 /* ---- liquid glass selection (liquid-glass.js): one glass drop under the selected choice, which
         flows to the next choice like a balloon. The four edges are animatable lengths; the script

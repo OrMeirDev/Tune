@@ -5,6 +5,7 @@ import {
   Loader2, Monitor, ScanSearch, ShieldCheck,
 } from 'lucide-react';
 import { api } from '../../api.js';
+import { DetailsDisclosure } from '../../components/DetailsDisclosure.jsx';
 import { ScanIncomplete } from '../../components/ScanIncomplete.jsx';
 import { AllGood } from '../../components/ScanSuccess.jsx';
 import { ProgressPill } from '../../components/TaskProgress.jsx';
@@ -38,7 +39,9 @@ export function UpdatesPage({ hw, wu, gpu, bios, sources, scan, soundKey, onScan
       <header className="page-header">
         <div>
           <h1>{t('up.title')}</h1>
-          <p className="subtitle">{hw ? `${hw.board} · ${hw.cpu.replace(/\(R\)|\(TM\)/g, '')} · ${hw.gpus.map((g) => g.name).join(', ')}` : t('up.scanningPc')}</p>
+          {hw ? <DetailsDisclosure label={t('ui.computerDetails')}>
+            <p>{hw.board} · {hw.cpu.replace(/\(R\)|\(TM\)/g, '')} · {hw.gpus.map((g) => g.name).join(', ')}</p>
+          </DetailsDisclosure> : <p className="subtitle">{t('up.scanningPc')}</p>}
           <div className="scan-line">
             {loading ? (<>
               <span className="progress"><div style={{ width: `${Math.round((scan.step / scan.total) * 100)}%` }} /></span>
@@ -84,7 +87,9 @@ export function UpdatesPage({ hw, wu, gpu, bios, sources, scan, soundKey, onScan
               <span className="dicon"><Icon size={17} /></span>
               <div style={{ minWidth: 0 }}>
                 <div className="dname"><bdi>{dev?.name || u.model || u.title}</bdi><span className="src">{t('up.signed')}</span></div>
-                <div className="dmeta">{dev ? `${dev.version} ${t('arrow')} ` : ''}<b>{titleVersion(u.title) || u.date}</b> · {u.maker} · {fmtGB(u.size)}</div>
+                <DetailsDisclosure label={t('ui.driverDetails')} context={dev?.name || u.model || u.title}>
+                  <p>{dev ? `${dev.version} ${t('arrow')} ` : ''}<b>{titleVersion(u.title) || u.date}</b> · {u.maker} · {fmtGB(u.size)}</p>
+                </DetailsDisclosure>
               </div>
               <div className="acts">
                 {busy === u.id || busy === 'all' ? <ProgressPill p={busy === 'all' ? null : prog[busy]} fallback={t(busy === 'all' ? 'prog.updating' : 'prog.installing')} />
@@ -98,7 +103,9 @@ export function UpdatesPage({ hw, wu, gpu, bios, sources, scan, soundKey, onScan
             <span className="dicon"><Monitor size={17} /></span>
             <div style={{ minWidth: 0 }}>
               <div className="dname"><bdi>{g.gpu}</bdi><span className="src">{g.vendor.toLowerCase()}.com · {t('official')}</span></div>
-              <div className="dmeta">{g.package ? t('up.installedPkg', { pkg: `${g.vendor === 'AMD' ? 'AMD Software ' : ''}${g.package}` }) : t('up.installedDrv', { v: g.installed })} · {t('up.latestOnSite')} <b>{g.title || g.latest}</b>{g.size ? <> · {ltr(g.size)}</> : null}</div>
+              <DetailsDisclosure label={t('ui.driverDetails')} context={g.gpu}>
+                <p>{g.package ? t('up.installedPkg', { pkg: `${g.vendor === 'AMD' ? 'AMD Software ' : ''}${g.package}` }) : t('up.installedDrv', { v: g.installed })} · {t('up.latestOnSite')} <b>{g.title || g.latest}</b>{g.size ? <> · {ltr(g.size)}</> : null}</p>
+              </DetailsDisclosure>
             </div>
             <div className="acts">
               {busy === g.gpu ? <ProgressPill p={prog[g.gpu]} fallback={t('prog.downloading')} />

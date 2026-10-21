@@ -1,6 +1,7 @@
 // One row of the performance center.
 import { AlertTriangle, BookOpen, Check, Download, ExternalLink, Info, Loader2 } from 'lucide-react';
 import { api } from '../../api.js';
+import { DetailsDisclosure } from '../../components/DetailsDisclosure.jsx';
 import { ProgressPill } from '../../components/TaskProgress.jsx';
 import { useT } from '../../i18n.js';
 import { ltr } from '../../presentation/format.jsx';
@@ -21,8 +22,13 @@ export function CenterRow({ r, bios, onApply, onBiosDownload, onBiosGuide, onGui
       <span className={`dicon ${r.ok === false ? 'warn' : r.ok === true ? 'good' : ''}`}>{r.ok === false ? <AlertTriangle size={16} /> : r.ok === true ? <Check size={16} /> : <Info size={16} />}</span>
       <div style={{ minWidth: 0 }}>
         <div className="dname">{recTitle(r, t)}{value && <> · <span style={{ fontWeight: 400 }}>{/^0x/.test(value) ? ltr(value) : value.replace(/\(?\d[\d.,:/-]*\)?(?:\s?(?:GB|MB|W|V|GHz|MT\/s))?/g, (m) => ltr(m))}</span></>}</div>
-        <div className="dmeta" style={{ whiteSpace: 'normal' }}>{note}</div>
-        {r.ok === false && <div className="dmeta if-not">{recIf(r, t)}</div>}
+        {/* Missing checks and BIOS information stay visible; background explanations are optional. */}
+        {(r.unchecked || isBios) && <div className="dmeta">{note}</div>}
+        {r.action && r.key === 'hags' && <div className="dmeta">{t('ui.restartNote')}</div>}
+        {!r.unchecked && (!isBios || r.ok === false) && <DetailsDisclosure label={t('ui.recommendationDetails')} context={recTitle(r, t)}>
+          {!isBios && <p>{note}</p>}
+          {r.ok === false && <p className="if-not">{recIf(r, t)}</p>}
+        </DetailsDisclosure>}
       </div>
       <div className="acts">
         {r.ok === true && <span className="ok-text">{t('ok')}</span>}

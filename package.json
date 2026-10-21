@@ -21,7 +21,8 @@
     "e2e:scan-failure": "vite build && electron e2e/scan-failure.cjs",
     "e2e:screenshots": "vite build && electron e2e/screenshots.cjs",
     "e2e:service-update": "vite build && electron e2e/service-update.cjs",
-    "e2e:smoke": "vite build && electron e2e/smoke.cjs"
+    "e2e:smoke": "vite build && electron e2e/smoke.cjs",
+    "e2e:ui-polish": "vite build && electron e2e/ui-polish.cjs"
   },
   "repository": "github:OrMeirDev/Tune",
   "dependencies": {

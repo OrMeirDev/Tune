@@ -4,6 +4,7 @@ import { AlertTriangle, Download, ExternalLink, X } from 'lucide-react';
 import { api } from '../../api.js';
 import { ProgressPill } from '../../components/TaskProgress.jsx';
 import { DialogFrame } from '../../components/DialogFrame.jsx';
+import { DetailsDisclosure } from '../../components/DetailsDisclosure.jsx';
 import { useT } from '../../i18n.js';
 import { ltr, rich } from '../../presentation/format.jsx';
 
@@ -25,7 +26,7 @@ export function BiosGuide({ bios, onClose, onDownload, busy, prog }) {
           <button className="icon-btn ghost" onClick={onClose} aria-label={t('close')}><X size={16} /></button>
         </div>
         <div className="guide-body">
-          {l.notes && <><div className="setting-title">{t('guide.whatsNew', m)}</div><div className="notes" dir="ltr">{l.notes}</div></>}
+          {l.notes && <DetailsDisclosure label={t('guide.whatsNew', m)}><div className="notes" dir="ltr">{l.notes}</div></DetailsDisclosure>}
           {bios.flash === 'windows' ? (<>
             <div className="setting-title">{t('guide.winTitle', m)}</div>
             <ol>{[1, 2, 3, 4, 5].map((i) => <li key={i}>{rich(t(`guide.win${i}`, m))}</li>)}</ol>

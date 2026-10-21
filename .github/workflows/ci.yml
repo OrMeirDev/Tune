@@ -79,6 +79,10 @@ jobs:
       - name: layout (en/he, smallest and typical window)
         if: ${{ !cancelled() }}
         run: npm run e2e:layout
+      - name: UI polish (all ten pages, en/he, details and existing actions; synthetic PC)
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        run: npm run e2e:ui-polish
       - name: failed scans are never shown as fine
         if: ${{ !cancelled() }}
         run: npm run e2e:scan-failure

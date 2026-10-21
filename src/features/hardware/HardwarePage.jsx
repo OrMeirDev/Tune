@@ -1,6 +1,7 @@
 // The device list, with search and export.
 import { useMemo, useState } from 'react';
 import { FileSpreadsheet, FileText, Search } from 'lucide-react';
+import { DetailsDisclosure } from '../../components/DetailsDisclosure.jsx';
 import { useT } from '../../i18n.js';
 import { shownDate } from '../../presentation/format.jsx';
 import { classIcon } from './devicePresentation.js';
@@ -31,7 +32,9 @@ export function HardwarePage({ hw, onExport }) {
               <span className="dicon"><Icon size={17} /></span>
               <div style={{ minWidth: 0 }}>
                 <div className="dname">{d.name}</div>
-                <div className="dmeta"><bdi dir="ltr">{d.version}</bdi> · {shownDate(d.date)} · {d.provider || d.maker}</div>
+                <DetailsDisclosure label={t('ui.driverDetails')} context={d.name}>
+                  <p><bdi dir="ltr">{d.version}</bdi> · {shownDate(d.date)} · {d.provider || d.maker}</p>
+                </DetailsDisclosure>
               </div>
               <span className="src">{d.cls || t('hw.other')}</span>
             </div>

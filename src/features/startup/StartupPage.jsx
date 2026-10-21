@@ -1,5 +1,6 @@
 // Apps that start with Windows.
 import { Rocket } from 'lucide-react';
+import { DetailsDisclosure } from '../../components/DetailsDisclosure.jsx';
 import { ProgressPill } from '../../components/TaskProgress.jsx';
 import { useT } from '../../i18n.js';
 
@@ -16,7 +17,9 @@ export function StartupPage({ startup, failed, onToggle, busy, prog }) {
             <span className="dicon"><Rocket size={16} /></span>
             <div style={{ minWidth: 0 }}>
               <div className="dname">{s.name}</div>
-              <div className="dmeta path-text" dir="ltr">{s.cmd}</div>
+              <DetailsDisclosure context={s.name}>
+                <p className="path-text" dir="ltr">{s.cmd}</p>
+              </DetailsDisclosure>
             </div>
             <div className="acts">
               {s.admin && <span className="src">{t('st.admin')}</span>}
