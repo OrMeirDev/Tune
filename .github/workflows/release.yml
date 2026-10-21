@@ -8,8 +8,8 @@
 # A version with a pre-release part (1.4.0-beta.1) becomes a GitHub pre-release: installed copies of
 # a regular release keep updating from the latest regular release (electron-updater skips
 # pre-releases), so only people who download it get it.
-# Production publication requires the owner's real certificate and a full green CI run for the
-# exact commit. CI test installers are still available without a production certificate.
+# Publication requires full green CI for this exact commit. The owner explicitly approved
+# unsigned 1.4.1; all other versions still require the production certificate.
 name: Release
 
 on:
@@ -61,12 +61,19 @@ jobs:
         run: node scripts/ci/release-gate.cjs
       - run: npm audit --audit-level=moderate
       - run: npm test
-      - name: prepare the production signing certificate
+      - name: select approved signing mode and prepare the certificate
         shell: pwsh
         env:
           CERTIFICATE: ${{ secrets.CSC_LINK }}
           CERT_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: |
+          # Owner instruction: publish 1.4.1 unsigned. This exception does not cover later versions.
+          if ($env:VERSION -eq '1.4.1') {
+            'SIGNING_MODE=unsigned' >> $env:GITHUB_ENV
+            Write-Host 'Tune 1.4.1: unsigned publication explicitly approved by the owner.'
+            exit 0
+          }
+          'SIGNING_MODE=signed' >> $env:GITHUB_ENV
           if (-not $env:CERTIFICATE -or -not $env:CERT_PASSWORD) { throw 'Production signing is not configured. Configure CSC_LINK (base64 PFX) and CSC_KEY_PASSWORD before publishing. Test builds remain available from CI.' }
           $pfx = Join-Path $env:RUNNER_TEMP 'tune-production-signing.pfx'
           [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CERTIFICATE))
@@ -79,8 +86,21 @@ jobs:
           "SIGNING_PUBLISHER=$publisher" >> $env:GITHUB_ENV
           'TUNE_SIGN_TIMESTAMP_URL=http://timestamp.digicert.com' >> $env:GITHUB_ENV
       - name: build with the production certificate
+        if: ${{ env.SIGNING_MODE == 'signed' }}
         shell: pwsh
         run: npm run dist -- --publish never "-c.win.publisherName=$env:SIGNING_PUBLISHER"
+      - name: build the owner-approved unsigned version
+        if: ${{ env.SIGNING_MODE == 'unsigned' }}
+        run: npm run dist -- --publish never
+      - name: verify the unsigned installer, application and service
+        if: ${{ env.SIGNING_MODE == 'unsigned' }}
+        shell: pwsh
+        run: |
+          $paths = @('release/win-unpacked/Tune.exe', 'release/win-unpacked/resources/service/TuneService.exe', "release/Tune-Setup-$env:VERSION.exe")
+          foreach ($path in $paths) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $path
+            if ($signature.Status -ne 'NotSigned') { throw "$path must be unsigned for this approved release; got $($signature.Status)" }
+          }
       - name: packed contents; development licensing overrides ignored
         run: node scripts/ci/packaged-check.cjs
       - name: publish
@@ -90,6 +110,9 @@ jobs:
         run: |
           $files = @(Get-ChildItem release -File | Where-Object { $_.Name -match '^Tune-Setup-.*\.exe(\.blockmap)?$' -or $_.Name -match '^(latest|beta|alpha)\.yml$' } | ForEach-Object FullName)
           if (-not ($files | Where-Object { $_ -match '\.exe$' })) { throw 'no installer in release/' }
+          $checksums = @($files | ForEach-Object { $hash = Get-FileHash -LiteralPath $_ -Algorithm SHA256; "$($hash.Hash.ToLowerInvariant())  $([IO.Path]::GetFileName($_))" })
+          $checksums | Set-Content -Encoding ascii release/SHA256SUMS.txt
+          $files += (Resolve-Path release/SHA256SUMS.txt).Path
           $kind = if ($env:VERSION -match '-') { '--prerelease' } else { '--latest' }
           # a pushed tag is used as it is; otherwise the tag is made at this commit
           $where = if ($env:GITHUB_REF -like 'refs/tags/*') { '--verify-tag' } else { "--target=$env:GITHUB_SHA" }

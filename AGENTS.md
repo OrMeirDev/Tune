@@ -119,13 +119,15 @@ The plan and the status of every task: `docs/roadmap/`.
   with a test `ops.ps1`. Fault injection exists only in a test build of the service
   (`build-service.cjs --test-faults <folder>`, `/define:TUNE_FAULTS`), never in what ships.
 - `npm run release` prints the guarded workflow instructions and publishes nothing; it cannot bypass CI
-  or production signing. `npm run dist -- --publish never` builds a local test candidate.
+  or the configured signing policy. `npm run dist -- --publish never` builds a local test candidate.
 - Publishing a release needs the owner's explicit go-ahead. With it: set the version in
   `package.json`, write `docs/release-notes/v<version>.md` (English and Hebrew), let CI pass on that
   commit, then push the tag `v<version>` (or, where tags can't be pushed, a commit whose message
   contains `[release v<version>]`); `.github/workflows/release.yml` builds on a Windows runner and
   publishes only after full CI succeeds for that exact commit and a real signing certificate is
-  configured (CSC_LINK: base64 PFX, CSC_KEY_PASSWORD). It never replaces an existing release.
+  configured (CSC_LINK: base64 PFX, CSC_KEY_PASSWORD). Exception: the owner explicitly authorized
+  unsigned publication of 1.4.1 on 21 October 2026. That version is built without signing, verified
+  unsigned, and labelled in both languages in its release notes. All other versions require signing. It never replaces an existing release.
   Ordinary branch pushes produce only a clearly labelled unsigned test-installer artifact. A version with a pre-release part (`1.4.0-beta.1`) becomes a GitHub pre-release, which
   installed copies don't update to by themselves.
 
