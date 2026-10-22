@@ -25,6 +25,7 @@ import { ServiceUpdateNotice } from './features/settings/ServiceUpdateNotice.jsx
 import { SettingsPage } from './features/settings/SettingsPage.jsx';
 import { StartupPage } from './features/startup/StartupPage.jsx';
 import { UpdatesPage } from './features/updates/UpdatesPage.jsx';
+import { scanVerdict } from './domain/scan-verdict.mjs';
 import { LangContext, makeT } from './i18n.js';
 
 // Which results each page shows, for the "showing the last scan · updating" label.
@@ -84,6 +85,8 @@ export default function App() {
   }, [fullScan, loadService, showCached]);
 
   const updatesCount = (wu?.length || 0) + (gpu || []).filter((g) => g.newer && g.url).length + (bios?.supported && bios.newer ? 1 : 0);
+  const verdict = scanVerdict({ running: scan.running, sources, total: updatesCount });
+  const scanIncomplete = verdict.failed.length > 0 || verdict.state === 'pending';
   // A message stored as a key (from the scan) is translated when shown.
   const shownMsg = msg && msg.key ? { ...msg, text: t(msg.key, msg.vars) } : msg;
 
@@ -110,7 +113,7 @@ export default function App() {
           </nav>
           <div className="sidebar-footer">
             <AdminChip service={service} until={adminUntil} onStart={adminStart} onStop={adminStop} onInstall={installService} busy={busy} />
-            <div><span className={`dot ${scan.running ? 'dot-off' : ''}`} /> {scan.running ? t('scanning') : t('sb.done')}</div>
+            <div><span className={`dot ${scan.running ? 'dot-off' : scanIncomplete ? 'dot-warning' : ''}`} /> {scan.running ? t('scanning') : scanIncomplete ? t('up.incompleteTitle') : t('sb.done')}</div>
             <div className="muted">{t('version', { v: version || '…' })}</div>
           </div>
         </aside>

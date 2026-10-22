@@ -218,6 +218,7 @@ textarea:focus, .unit-input:focus, .plain-select:focus { border-color: var(--acc
   flex: 1; min-height: 0; overflow-y: auto; padding-block: 4px;
 }
 .nav-panel {
+  flex-shrink: 0;
   padding: 6px; border-radius: 22px; gap: 4px;
   background: rgba(255, 255, 255, .28); border: 1px solid rgba(119, 160, 217, .1);
   box-shadow: inset 0 1px 0 var(--edge);
@@ -320,3 +321,22 @@ textarea:focus, .unit-input:focus, .plain-select:focus { border-color: var(--acc
 .gtime-cell.on { color: var(--accent); font-weight: 700; }
 .gtime-col.lg-host::before { border-radius: 9px; }
 .gtime-sep { font-size: 18px; font-weight: 700; color: var(--muted); }
+
+/* Keep group content intact while compact row spacing fits the supported window sizes. */
+.sidebar .nav-group { flex-shrink: 0; }
+.dot-warning { background: #d97706; }
+
+/* All ten destinations remain visible at Tune's minimum 980 × 640 content size. */
+.sidebar > nav { overflow: visible; gap: 3px; }
+.sidebar .nav-item { min-height: 40px; padding-block: 6px; }
+.sidebar .nav-panel { padding: 4px; gap: 2px; }
+@media (max-height: 760px) {
+  .sidebar .nav-item { min-height: 32px; padding-block: 2px; }
+  .sidebar .nav-panel { gap: 1px; }
+  .sidebar .nav-group { margin-block: 2px 0; }
+  .sidebar-footer { padding-top: 6px; }
+}
+@media (max-height: 680px) {
+  .sidebar .nav-item { min-height: 30px; line-height: 20px; }
+  .sidebar .brand { margin-bottom: 6px; }
+}

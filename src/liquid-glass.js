@@ -37,7 +37,11 @@ function set(box, edges, timing) {
 // scaling in (a menu opening) or scrolled doesn't throw the drop off. Rects only as a fallback.
 function edgesOf(box, item) {
   if (item.offsetParent === box) {
-    return { t: item.offsetTop, b: item.offsetTop + item.offsetHeight, l: item.offsetLeft, r: item.offsetLeft + item.offsetWidth };
+    // Chromium includes an RTL scrollbar in offsetLeft, but an absolutely positioned
+    // pseudo-element already starts after it. Counting it twice clips the glass on the right.
+    const scrollbarLeft = box.clientLeft - (parseFloat(getComputedStyle(box).borderLeftWidth) || 0);
+    const left = item.offsetLeft - scrollbarLeft;
+    return { t: item.offsetTop, b: item.offsetTop + item.offsetHeight, l: left, r: left + item.offsetWidth };
   }
   const hb = box.getBoundingClientRect();
   const ib = item.getBoundingClientRect();
@@ -89,11 +93,15 @@ function update() {
   for (const g of GROUPS) {
     for (const box of document.querySelectorAll(g.box)) {
       toggle(box, 'lg-host', true);
+      if (!observed.has(box)) { layoutObserver.observe(box); observed.add(box); }
       const item = [...box.querySelectorAll(g.item)].find((el) => el.matches(g.on));
       place(box, item);
     }
   }
 }
+
+const observed = new WeakSet();
+const layoutObserver = new ResizeObserver(() => schedule());
 
 let queued = false;
 function schedule() {
