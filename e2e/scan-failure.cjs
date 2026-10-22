@@ -47,7 +47,7 @@ const realStartup = async () => ({ ok: true, data: sample.startup });
 sys.recommendations = async () => ({ ok: true, data: sample.recommendations });
 sys.driverUpdates = async () => (mode === 1 ? { ok: false, error: 'Windows Update service did not answer' } : { ok: true, data: [] });
 // the real failure shape: the adapter answers, and the card carries the error (R1)
-sys.gpuVendorCheck = async (gpus) => ({ ok: true, data: (gpus || []).map((g) => (mode === 3 ? { status: 'error', gpu: g.name, vendor: 'NVIDIA', error: 'catalog unavailable' } : { status: 'ok', gpu: g.name, vendor: 'AMD', newer: false })) });
+sys.gpuVendorCheck = async (gpus) => ({ ok: true, data: (gpus || []).map((g) => (mode === 3 ? { status: 'error', gpu: g.name, vendor: 'NVIDIA', error: 'catalog unavailable', page: 'https://www.nvidia.com/en-us/drivers/' } : { status: 'ok', gpu: g.name, vendor: 'AMD', newer: false })) });
 sys.biosCheck = async () => (mode === 3 ? BIOS_NEW : mode === 2 ? { ok: false, error: 'ASUS BIOS list unavailable' } : BIOS_OK);
 sys.junkScan = async () => (mode === 4 ? { ok: false, error: 'scan failed' } : realJunk());
 sys.startupList = async () => (mode === 4 ? { ok: false, error: 'scan failed' } : realStartup());
@@ -73,7 +73,7 @@ app.whenReady().then(async () => {
   const settle = async () => { await wait(800); while (await js(`!!document.querySelector('.dot-off')`)) await wait(300); await wait(2200); };
   const go = (re) => js(`[...document.querySelectorAll('.nav-item')].find((b) => ${re}.test(b.textContent))?.click()`);
   const centerRow = (re) => js(`(() => { const r = [...document.querySelectorAll('.drow')].find(r => ${re}.test(r.querySelector('.dname')?.textContent || '')); return r ? { text: r.textContent, healthy: !!r.querySelector('.dicon.good, .ok-text') } : null; })()`);
-  const updates = () => js(`({ allGood: !!document.querySelector('.all-good'), incomplete: !!document.querySelector('.scan-incomplete'), partial: !!document.querySelector('.partial-scan'), rows: document.querySelectorAll('.panel .drow').length, upToDate: document.querySelectorAll('.stats.tiled .stat b')[2]?.textContent, chimes: window.__chimes })`);
+  const updates = () => js(`({ allGood: !!document.querySelector('.all-good'), incomplete: !!document.querySelector('.scan-incomplete'), partial: !!document.querySelector('.partial-scan'), rows: document.querySelectorAll('.panel .drow:not(.gpu-check-error)').length, gpuInfo: document.querySelectorAll('.panel .gpu-check-error').length, sidebarIncomplete: !!document.querySelector('.sidebar-footer .dot-warning'), upToDate: document.querySelectorAll('.stats.tiled .stat b')[2]?.textContent, chimes: window.__chimes })`);
   const rescan = async () => { await go('/^Updates/'); await wait(500); await js(`document.querySelector('header .btn-primary')?.click()`); await settle(); };
 
   await settle();
@@ -94,7 +94,9 @@ app.whenReady().then(async () => {
 
   mode = 3; await rescan(); u = await updates();
   check('3 NVIDIA fails + BIOS update: no celebration (R1)', !u.allGood, u);
-  check('3 NVIDIA fails + BIOS update: the update is shown', u.rows === 1);
+  check('3 NVIDIA fails + BIOS update: exactly one installable update is shown', u.rows === 1);
+  check('3 NVIDIA fails: one separate explanation and incomplete sidebar status', u.gpuInfo === 1 && u.sidebarIncomplete);
+  check('3 NVIDIA fails: official page link, no unverified installer action',await js(`(() => {const row=document.querySelector('.gpu-check-error');return row?.querySelectorAll('button').length===1 && /Official page/.test(row.textContent);})()`));
   check('3 NVIDIA fails + BIOS update: "not checked" note', u.partial);
   await shot('3-gpu-fails.png');
   await go('/^Performance center/'); await wait(1500);
