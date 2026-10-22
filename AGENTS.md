@@ -126,7 +126,7 @@ The plan and the status of every task: `docs/roadmap/`.
   contains `[release v<version>]`); `.github/workflows/release.yml` builds on a Windows runner and
   publishes only after full CI succeeds for that exact commit and a real signing certificate is
   configured (CSC_LINK: base64 PFX, CSC_KEY_PASSWORD). Exception: the owner explicitly authorized
-  unsigned publication of 1.4.1 on 21 October 2026. That version is built without signing, verified
+  unsigned publication of 1.4.1 on 21 October 2026 and 1.4.2 on 22 October 2026. These versions are built without signing, verified
   unsigned, and labelled in both languages in its release notes. All other versions require signing. It never replaces an existing release.
   Ordinary branch pushes produce only a clearly labelled unsigned test-installer artifact. A version with a pre-release part (`1.4.0-beta.1`) becomes a GitHub pre-release, which
   installed copies don't update to by themselves.
