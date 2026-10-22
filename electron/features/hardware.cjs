@@ -9,9 +9,10 @@ $devices = @(Get-CimInstance Win32_PnPSignedDriver | Where-Object { $_.DeviceNam
   @{ name = $_.DeviceName; cls = $_.DeviceClass; maker = $_.Manufacturer; provider = $_.DriverProviderName; version = $_.DriverVersion;
      date = $(if ($_.DriverDate) { $_.DriverDate.ToString('yyyy-MM-dd') } else { $null }); hwid = $_.HardWareID; id = $_.DeviceID } })
 $problems = @(Get-CimInstance Win32_PnPEntity | Where-Object { $_.ConfigManagerErrorCode -ne 0 } | ForEach-Object { @{ name = $_.Name; code = [int]$_.ConfigManagerErrorCode; id = $_.PNPDeviceID } })
-# AMD's site names releases by the "AMD Software" package version (26.8.1), not the driver's 32.0.x number.
-$amdSw = (Get-ItemProperty 'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*', 'HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue |
-  Where-Object { $_.DisplayName -match '^AMD Software' } | Select-Object -First 1).DisplayVersion
+# CN ReleaseVersion is the Adrenalin release (26.10.1). The uninstall DisplayVersion may
+# instead be an internal build number, so it must never be compared with the public release.
+$amdRelease = (Get-ItemProperty 'HKLM:\\SOFTWARE\\AMD\\CN' -Name ReleaseVersion -ErrorAction SilentlyContinue).ReleaseVersion
+$amdSw = if ([string]$amdRelease -match '^\\d{2}\\.\\d{1,2}\\.\\d{1,2}$') { [string]$amdRelease } else { $null }
 $result = @{
   amdSoftware = $amdSw
   systemMaker = $cs.Manufacturer; systemModel = $cs.Model; systemSku = $cs.SystemSKUNumber

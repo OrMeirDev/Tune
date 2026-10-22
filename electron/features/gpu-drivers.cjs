@@ -3,18 +3,33 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { nvidiaPackageMatches } = require('../domain/catalog-policy.cjs');
+const { amdProductPage, amdDriverFromPage, amdReleaseVersion } = require('../domain/amd-catalog.cjs');
 const { cmpVer } = require('../domain/versions.cjs');
 const { downloadFile } = require('../infra/download.cjs');
 const { runPS } = require('../infra/powershell.cjs');
 const { vendorFetch, boundedBody } = require('../infra/vendor-fetch.cjs');
 
 // A maker's page or API: an HTTP error, a time-out or an empty answer is a failure, never "no update".
-const MAKER_TIMEOUT_MS = 20000;
+const MAKER_TIMEOUT_MS = 12000;
 async function makerFetch(url, headers = {}) {
-  const r = await vendorFetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', ...headers }, signal: AbortSignal.timeout(MAKER_TIMEOUT_MS) });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const bytes = await boundedBody(r, 8 * 1024 * 1024);
-  return { text: async () => bytes.toString('utf8'), json: async () => JSON.parse(bytes.toString('utf8')) };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await vendorFetch(url, { headers: { 'User-Agent': 'Mozilla/5.0', ...headers }, signal: AbortSignal.timeout(MAKER_TIMEOUT_MS) });
+      if (!r.ok) {
+        await r.body?.cancel?.();
+        const error = new Error(`HTTP ${r.status}`);
+        error.retryable = r.status === 408 || r.status === 429 || r.status >= 500;
+        throw error;
+      }
+      const bytes = await boundedBody(r, 8 * 1024 * 1024);
+      return { text: async () => bytes.toString('utf8'), json: async () => JSON.parse(bytes.toString('utf8')) };
+    } catch (error) {
+      // Retry transient network/HTTP failures once; trust-policy failures never gain another route.
+      const transient = error.retryable ?? /fetch failed|network|timeout|timed out|abort|ECONN|ENOTFOUND|EAI_AGAIN|socket/i.test(String(error.message));
+      if (attempt || !transient) throw error;
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
+  }
 }
 
 // Graphics drivers: Windows Update lags behind the GPU makers, so check their official sites too.
@@ -24,22 +39,7 @@ async function gpuVendorCheck(gpus, amdSoftware) {
   const out = [];
   for (const g of gpus || []) {
     if (/AMD|Radeon/i.test(g.name)) {
-      try {
-        const html = await (await makerFetch('https://www.amd.com/en/support/download/drivers.html')).text();
-        const url = (html.match(/https:\/\/drivers\.amd\.com\/drivers\/installer\/[^"'\s]+minimalsetup[^"'\s]+\.exe/) || [])[0];
-        const ver = url && (url.match(/adrenalin-edition-([\d.]+)-/) || [])[1];
-        // the page answered but without a driver link: changed or blocked, so the result is unknown
-        if (!ver) throw new Error("no driver link on AMD's page");
-        out.push({
-          status: 'ok', gpu: g.name, vendor: 'AMD', installed: g.driverVersion, package: amdSoftware || null, latest: ver || null, url: url || null,
-          title: ver ? `AMD Software ${ver}` : null, installerKind: 'autodetect',
-          // Unknown package version: offer it rather than hide a possible update.
-          newer: false, // the generic tool establishes applicability itself, not this catalog check
-          page: 'https://www.amd.com/en/support/download/drivers.html',
-        });
-      } catch (e) {
-        out.push({ status: 'error', gpu: g.name, vendor: 'AMD', installed: g.driverVersion, error: String(e.message || e), page: 'https://www.amd.com/en/support/download/drivers.html' });
-      }
+      out.push(await amdCheck(g, amdSoftware));
     } else if (/NVIDIA|GeForce|RTX|GTX|Quadro/i.test(g.name)) {
       out.push(await nvidiaCheck(g));
     } else if (/Intel.*Arc/i.test(g.name)) {
@@ -50,6 +50,43 @@ async function gpuVendorCheck(gpus, amdSoftware) {
     }
   }
   return { ok: true, data: out };
+}
+
+async function amdCheck(g, amdSoftware) {
+  const page = amdProductPage(g.name);
+  const base = { gpu: g.name, vendor: 'AMD', installed: g.driverVersion, package: amdReleaseVersion(amdSoftware), latest: null, url: null, newer: false, page: page || 'https://www.amd.com/en/support/download/drivers.html' };
+  try {
+    if (process.arch !== 'x64') throw new Error('AMD catalog requires Windows x64');
+    if (!page) throw new Error('This AMD model needs the official auto-detect tool');
+    const windows11 = Number(os.release().split('.')[2]) >= 22000;
+    const html = await (await makerFetch(page)).text();
+    const driver = amdDriverFromPage(html, g.name, windows11);
+    let newer;
+    // The AMD release number and Windows' four-part driver number are different namespaces.
+    // Only compare the installed Adrenalin release with the package release from AMD's page.
+    if (base.package) newer = cmpVer(driver.version, base.package) > 0;
+    else {
+      if (!driver.notes || !/^\d+\.\d+\.\d+\.\d+$/.test(String(g.driverVersion || ''))) throw new Error('Installed AMD release could not be identified');
+      const notes = await (await makerFetch(driver.notes)).text();
+      if (!notes.includes(`Adrenalin Edition ${driver.version}`)) throw new Error('AMD release notes do not match the package');
+      const versions = [...new Set([...notes.matchAll(/Windows Driver Store Version\s+(\d+\.\d+\.\d+\.\d+)/gi)].map(m => m[1]))];
+      if (versions.includes(g.driverVersion)) newer = false;
+      else if (versions.length === 1) newer = cmpVer(versions[0], g.driverVersion) > 0;
+      else throw new Error('AMD lists multiple driver branches; installed release could not be matched');
+    }
+    return { ...base, status: 'ok', latest: driver.version, url: driver.url, title: `AMD Software ${driver.version}`, installerKind: 'package', newer };
+  } catch (error) {
+    // Keep the existing official auto-detect action for models or installed versions that
+    // cannot be matched. It is explicitly a tool, never proof that the GPU is up to date.
+    if (process.arch === 'x64') {
+      try {
+        const html = await (await makerFetch('https://www.amd.com/en/support/download/drivers.html')).text();
+        const url = html.match(/https:\/\/drivers\.amd\.com\/drivers\/installer\/[^"'\s]+minimalsetup[^"'\s]+\.exe/)?.[0];
+        if (url) return { ...base, status: 'ok', installerKind: 'autodetect', url, error: String(error.message || error) };
+      } catch { /* retain the original failure and official product page */ }
+    }
+    return { ...base, status: 'error', error: String(error.message || error) };
+  }
 }
 
 // NVIDIA's own driver finder: its product list gives the IDs for this card's exact name (listed

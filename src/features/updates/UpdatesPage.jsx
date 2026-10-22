@@ -118,6 +118,13 @@ export function UpdatesPage({ hw, wu, gpu, bios, sources, scan, soundKey, onScan
           <div style={{ minWidth: 0 }}><div className="dname"><bdi>{g.gpu}</bdi></div><div className="dmeta" style={{ whiteSpace: 'normal' }}>{t('up.amdAutoDetect')}</div></div>
           <div className="acts"><button className="btn-ghost" onClick={() => onGpu(g)} disabled={!!busy}><Download size={14} /> {t('up.amdOpen')}</button></div>
         </div>)}
+        {(gpu || []).filter(g => g.status === 'error').map(g => (
+          <div key={g.gpu} className="drow gpu-check-error">
+            <span className="dicon"><Monitor size={17} /></span>
+            <div style={{ minWidth: 0 }}><div className="dname"><bdi>{g.gpu}</bdi></div><div className="dmeta" style={{ whiteSpace: 'normal' }}>{t('up.gpuUnknown')}</div></div>
+            <div className="acts"><button className="btn-ghost" onClick={() => api.openLink(g.page)}><ExternalLink size={14} /> {t('up.officialPage')}</button></div>
+          </div>
+        ))}
         {(gpu || []).filter((g) => g.vendor === 'Intel').map((g) => (
           <div key={g.gpu} className="drow">
             <span className="dicon"><Monitor size={17} /></span>

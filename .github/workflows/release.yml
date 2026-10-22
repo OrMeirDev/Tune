@@ -9,7 +9,7 @@
 # a regular release keep updating from the latest regular release (electron-updater skips
 # pre-releases), so only people who download it get it.
 # Publication requires full green CI for this exact commit. The owner explicitly approved
-# unsigned 1.4.1; all other versions still require the production certificate.
+# unsigned 1.4.1 and 1.4.2; all other versions still require the production certificate.
 name: Release
 
 on:
@@ -67,10 +67,10 @@ jobs:
           CERTIFICATE: ${{ secrets.CSC_LINK }}
           CERT_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
         run: |
-          # Owner instruction: publish 1.4.1 unsigned. This exception does not cover later versions.
-          if ($env:VERSION -eq '1.4.1') {
+          # Owner instructions: publish 1.4.1 and 1.4.2 unsigned; later versions still require signing.
+          if ($env:VERSION -in @('1.4.1', '1.4.2')) {
             'SIGNING_MODE=unsigned' >> $env:GITHUB_ENV
-            Write-Host 'Tune 1.4.1: unsigned publication explicitly approved by the owner.'
+            Write-Host ('Tune ' + $env:VERSION + ': unsigned publication explicitly approved by the owner.')
             exit 0
           }
           'SIGNING_MODE=signed' >> $env:GITHUB_ENV

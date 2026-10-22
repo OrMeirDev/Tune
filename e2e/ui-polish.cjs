@@ -52,7 +52,7 @@ let failed = false;
 const ok = data => ({ ok: true, data });
 Object.assign(sys, {
   scanHardware: async () => ok(sample.hardware), driverUpdates: async () => ok(sample.updates),
-  gpuVendorCheck: async () => ok(sample.gpu), biosCheck: async () => ok(sample.bios),
+  gpuVendorCheck: async () => ok(failed ? [{gpu:'AMD Radeon RX 7900 XTX',vendor:'AMD',status:'error',page:'https://www.amd.com/en/support/download/drivers.html',newer:false}] : sample.gpu), biosCheck: async () => ok(sample.bios),
   junkScan: async () => failed ? { ok: false, error: 'SAMPLE failed read' } : ok(sample.junk),
   startupList: async () => failed ? { ok: false, error: 'SAMPLE failed read' } : ok(sample.startup),
   recommendations: async () => ok(sample.recommendations), performance: async () => ok(sample.performance),
@@ -94,10 +94,16 @@ run.guard(async () => {
     fs.writeFileSync(path.join(output, `${name}.png`), image.toPNG());
   };
   const geometry = () => js(`(() => {
-    const main=document.querySelector('.main'), side=document.querySelector('.sidebar');
+    const main=document.querySelector('.main'), side=document.querySelector('.sidebar'), nav=side.querySelector('nav'), selected=nav.querySelector('.active');
+    const nb=nav.getBoundingClientRect(), ib=selected.getBoundingClientRect(), p=getComputedStyle(nav,'::before');
+    const glassLeft=nb.left+nav.clientLeft+parseFloat(p.left)-nav.scrollLeft;
+    const glassTop=nb.top+nav.clientTop+parseFloat(p.top)-nav.scrollTop;
+    const aligned=Math.abs(glassLeft-ib.left)<1.5 && Math.abs(glassTop-ib.top)<1.5 && Math.abs(parseFloat(p.width)-ib.width)<1.5 && Math.abs(parseFloat(p.height)-ib.height)<1.5;
+    const footer=side.querySelector('.sidebar-footer').getBoundingClientRect();
+    const navFits=nav.scrollHeight<=nav.clientHeight+1 && [...nav.querySelectorAll('button')].every(e=>{const r=e.getBoundingClientRect();return r.top>=nb.top-1 && r.bottom<=Math.min(nb.bottom,footer.top)+1;});
     const visible=e=>{const d=e.closest('details:not([open])');return e.getClientRects().length && (!d || d.querySelector(':scope > summary').contains(e));};
     const clipped=[...main.querySelectorAll('button,summary,input,select')].filter(visible).filter(e=>e.scrollWidth>e.clientWidth+2).map(e=>e.textContent.trim().slice(0,50));
-    return {wide:document.documentElement.scrollWidth>innerWidth+1,main:main.scrollHeight>main.clientHeight+2,sidebar:side.scrollHeight>side.clientHeight+2,clipped};
+    return {aligned,navFits,wide:document.documentElement.scrollWidth>innerWidth+1,main:main.scrollHeight>main.clientHeight+2,sidebar:side.scrollHeight>side.clientHeight+2,clipped};
   })()`);
   for (const lang of ['en', 'he']) {
     await go('settings');
@@ -109,10 +115,17 @@ run.guard(async () => {
       for (const route of routes) {
         await go(route);
         const g = await geometry();
-        run.check(`${lang} ${width} ${route}: fits the window and controls`, !g.wide && !g.main && !g.sidebar && !g.clipped.length, g);
-        if (width === 1347 || route === 'overview') await screenshot(`${lang}-${width}-${route}`);
+        run.check(`${lang} ${width} ${route}: fits the window and controls`, !g.wide && !g.main && !g.sidebar && !g.clipped.length && g.aligned && g.navFits, g);
+        if (width === 1347 || route === 'overview' || route === 'settings') await screenshot(`${lang}-${width}-${route}`);
       }
     }
+    // Force the OS scrollbar even though the compact production menu does not need one.
+    // This reproduces the RTL-only coordinate error independently of the spacing fix.
+    await js(`document.querySelector('.sidebar nav').style.overflowY='scroll'`); await wait(150);
+    await go('overview');
+    const scrolled = await geometry();
+    run.check(`${lang}: glass still aligns when a scrollbar is present`,scrolled.aligned,scrolled);
+    await js(`document.querySelector('.sidebar nav').style.removeProperty('overflow-y')`); await wait(100);
   }
   run.check('browsing all pages never starts a machine change', changes.length === 0, changes);
   run.check('ten destinations remain accessible', await js(`document.querySelectorAll('.nav-item').length===10`));
@@ -172,6 +185,7 @@ run.guard(async () => {
   // A failed fresh scan must leave the old figures historical, never turn them into a healthy zero.
   failed=true; await go('updates');
   await js(`document.querySelector('header .btn-primary').click()`); await wait(250);
+  run.check('failed GPU check makes the sidebar status incomplete, never green',await js(`!!document.querySelector('.sidebar-footer .dot-warning') && !document.querySelector('.sidebar-footer').textContent.includes('הסריקה הושלמה')`));
   await go('overview');
   run.check('failed cleanup and startup are not presented as current values', await js(`[...document.querySelectorAll('.ohead')].slice(0,2).every(e=>e.textContent.includes('—'))`));
   await screenshot('he-failed-overview');
